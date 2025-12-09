@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from pm_mcp.config import Settings, get_settings
+from pm_mcp.core.database import get_db_pool
 from pm_mcp.services.calendar_service import CalendarService
 from pm_mcp.services.confluence_service import ConfluenceService
 from pm_mcp.services.jira_service import JiraService
@@ -71,8 +72,6 @@ async def get_pm_service(
     Yields:
         PmService instance with initialized database connection.
     """
-    from pm_mcp.core.database import get_db_pool
-
     db_pool = await get_db_pool()
     pm_service = PmService(db_pool, settings or get_settings())
     yield pm_service

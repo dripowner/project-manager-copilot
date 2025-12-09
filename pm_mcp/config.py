@@ -1,6 +1,7 @@
 """Configuration management using pydantic-settings."""
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -42,6 +43,12 @@ class Settings(BaseSettings):
     server_host: str = Field(default="0.0.0.0", description="Server host")
     server_port: int = Field(default=8000, description="Server port")
 
+    # MCP Transport
+    mcp_transport: Literal["stdio", "http"] = Field(
+        default="http",
+        description="MCP transport mode: 'stdio' for CLI/desktop apps, 'http' for network deployment",
+    )
+
     @property
     def database_url(self) -> str:
         """Construct PostgreSQL connection URL."""
@@ -59,7 +66,7 @@ class Settings(BaseSettings):
         )
 
 
-@lru_cache
+@lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Get cached settings instance."""
     return Settings()

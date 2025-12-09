@@ -1,12 +1,16 @@
 """FastMCP server initialization and configuration."""
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator
 
 from fastmcp import FastMCP
+from starlette.applications import Starlette
+from starlette.routing import Mount
 
 from pm_mcp.config import get_settings
+from pm_mcp.constants import SERVER_INSTRUCTIONS
 from pm_mcp.core.database import close_db_pool, get_db_pool
 from pm_mcp.services.calendar_service import CalendarService
 from pm_mcp.services.confluence_service import ConfluenceService
@@ -20,70 +24,13 @@ from pm_mcp.tools.pm import register_pm_tools
 logger = logging.getLogger(__name__)
 
 
-@asynccontextmanager
-async def app_lifespan(app: Any) -> AsyncGenerator[None, None]:
-    """Manage application lifecycle - startup and shutdown.
+def create_mcp_server() -> FastMCP:
+    """Create and configure MCP server with all tools registered.
 
-    This lifespan handler initializes the database pool and PM service
-    on startup, and cleans up resources on shutdown.
+    Returns:
+        FastMCP: Server instance ready for HTTP or STDIO transport.
     """
-    logger.info("Starting PM MCP Server...")
-
-    # Initialize database pool and PM service
-    try:
-        db_pool = await get_db_pool()
-        # Initialize pm_service on the global mcp instance
-        mcp.pm_service = PmService(db_pool, mcp._app_settings)  # type: ignore[attr-defined]
-        logger.info("Database pool and PM service initialized")
-    except Exception as e:
-        logger.warning(f"Database pool initialization failed: {e}")
-        logger.warning("PM tools requiring database will not work")
-
-    yield
-
-    # Cleanup
-    logger.info("Shutting down PM MCP Server...")
-    await close_db_pool()
-    logger.info("Cleanup completed")
-
-
-def create_server() -> FastMCP:
-    """Create and configure the FastMCP server.
-
-    Services are attached to the mcp instance and accessed via
-    ctx.fastmcp in tools (FastMCP's recommended DI pattern for v2.13).
-    """
-    settings = get_settings()
-
-    # Create MCP server
-    mcp = FastMCP(
-        name="pm-mcp",
-        instructions="""
-PM MCP Server - Project Management integration server.
-
-This server provides tools for:
-- Google Calendar: List meetings and events
-- Confluence: Search pages, read content, create meeting notes
-- Jira: Create/list/update issues, add comments
-- PM Layer: Link meetings to issues, track action items, get project snapshots
-
-Use these tools to:
-1. Find meetings in calendar (calendar_list_events)
-2. Search and read meeting protocols in Confluence (confluence_search_pages, confluence_get_page_content)
-3. Extract action items and create Jira issues (jira_create_issues_batch)
-4. Link issues to meetings for traceability (pm_link_meeting_issues)
-5. Check status of action items (pm_get_meeting_issues)
-6. Get project health overview (pm_get_project_snapshot)
-""",
-    )
-
-    # Attach services to mcp instance (accessed via ctx.fastmcp in tools)
-    mcp.jira_service = JiraService(settings)  # type: ignore[attr-defined]
-    mcp.confluence_service = ConfluenceService(settings)  # type: ignore[attr-defined]
-    mcp.calendar_service = CalendarService(settings)  # type: ignore[attr-defined]
-    # Note: pm_service requires db_pool, initialized lazily in lifespan
-    mcp.pm_service = None  # type: ignore[attr-defined]
-    mcp._app_settings = settings  # type: ignore[attr-defined]
+    mcp = FastMCP(name="pm-mcp", instructions=SERVER_INSTRUCTIONS)
 
     # Register all tools (they access services via ctx.fastmcp)
     register_calendar_tools(mcp)
@@ -91,34 +38,58 @@ Use these tools to:
     register_jira_tools(mcp)
     register_pm_tools(mcp)
 
-    logger.info("All tools registered")
-
+    logger.info("MCP server created, tools registered")
     return mcp
 
 
-# Create server instance
-mcp = create_server()
+def create_http_app():
+    """Create ASGI application with MCP server for HTTP deployment.
 
+    Initializes all services (Jira, Confluence, Calendar, PM/DB) during startup
+    and handles proper cleanup on shutdown.
 
-def get_http_app():
-    """Get HTTP/ASGI application for production deployment.
-
-    This creates an ASGI application with proper lifespan management
-    for database pool initialization and MCP session management.
-
-    The combined lifespan ensures:
-    1. Database pool is initialized before MCP starts accepting requests
-    2. MCP session manager is properly initialized (via mcp_app.lifespan)
-    3. Resources are cleaned up in reverse order on shutdown
+    Returns:
+        Starlette: ASGI application ready for uvicorn/gunicorn.
     """
-    from starlette.applications import Starlette
-    from starlette.routing import Mount
 
+    # Create reusable MCP server
+    mcp = create_mcp_server()
     mcp_app = mcp.http_app(path="/mcp")
 
     @asynccontextmanager
+    async def app_lifespan(app: Any) -> AsyncGenerator[None, None]:
+        """Initialize services on startup, cleanup on shutdown."""
+        logger.info("Starting PM MCP Server (HTTP transport)...")
+
+        # Initialize all services (sync ones first)
+        settings = get_settings()
+        mcp.jira_service = JiraService(settings)
+        mcp.confluence_service = ConfluenceService(settings)
+        mcp.calendar_service = CalendarService(settings)
+        logger.info("External services initialized (Jira, Confluence, Calendar)")
+
+        # Initialize async resources (database pool and PM service)
+        db_pool = None
+        try:
+            db_pool = await get_db_pool()
+            mcp.pm_service = PmService(db_pool, settings)
+            logger.info("Database pool and PM service initialized")
+        except Exception as e:
+            logger.warning(f"Database pool initialization failed: {e}")
+            logger.warning("PM tools requiring database will not work")
+            mcp.pm_service = None
+
+        yield
+
+        # Cleanup
+        logger.info("Shutting down PM MCP Server...")
+        if db_pool:
+            await close_db_pool()
+        logger.info("Cleanup completed")
+
+    @asynccontextmanager
     async def combined_lifespan(app: Any) -> AsyncGenerator[None, None]:
-        """Combine app lifespan with MCP lifespan."""
+        """Combine app and MCP session lifespans."""
         async with app_lifespan(app):
             async with mcp_app.lifespan(app):
                 yield
@@ -127,3 +98,50 @@ def get_http_app():
         lifespan=combined_lifespan,
         routes=[Mount("/", app=mcp_app)],
     )
+
+
+def run_stdio_server() -> None:
+    """Run MCP server in STDIO mode for local/desktop use.
+
+    Initializes all services and blocks until stdin closes.
+    Database connections are properly cleaned up on shutdown.
+    """
+    logger.info("Starting PM MCP Server (STDIO transport)...")
+
+    # Create reusable MCP server
+    mcp = create_mcp_server()
+
+    # Initialize services synchronously
+    settings = get_settings()
+    mcp.jira_service = JiraService(settings)
+    mcp.confluence_service = ConfluenceService(settings)
+    mcp.calendar_service = CalendarService(settings)
+    logger.info("External services initialized (Jira, Confluence, Calendar)")
+
+    # Initialize async resources (database pool and PM service)
+    async def init_async_services():
+        """Initialize database and PM service."""
+        try:
+            db_pool = await get_db_pool()
+            mcp.pm_service = PmService(db_pool, settings)
+            logger.info("Database pool and PM service initialized")
+            return db_pool
+        except Exception as e:
+            logger.warning(f"Database pool initialization failed: {e}")
+            logger.warning("PM tools requiring database will not work")
+            mcp.pm_service = None
+            return None
+
+    # Run async initialization before starting server
+    db_pool = asyncio.run(init_async_services())
+
+    logger.info("MCP server ready, waiting for requests...")
+
+    try:
+        # Run in STDIO mode (blocks until stdin closes)
+        mcp.run()
+    finally:
+        # Cleanup on shutdown
+        if db_pool:
+            logger.info("Cleaning up database connection...")
+            asyncio.run(close_db_pool())
