@@ -1,6 +1,6 @@
-# Multi-stage Dockerfile for PM Copilot Agent
+# Multi-stage Dockerfile for PM Copilot A2A Agent
 # Context: project root
-# Build: docker build -f agent/Dockerfile -t pm-agent .
+# Build: docker build -f agent/Dockerfile -t agent-a2a .
 
 # ============================================================================
 # Stage 1: Build - Install dependencies
@@ -14,11 +14,11 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 
 # Copy dependency files
-COPY pyproject.toml ./
+COPY pyproject.toml uv.lock ./
 
-# Install dependencies with cache mount (без --no-dev для установки всех групп)
+# Install dependencies with cache mount
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --group agent --group mcp-server
+    uv sync --frozen --no-install-project --group agent
 
 # ============================================================================
 # Stage 2: Production - Minimal runtime image
@@ -33,7 +33,7 @@ COPY --from=builder /app/.venv /app/.venv
 # Copy pyproject.toml for package metadata
 COPY pyproject.toml ./
 
-# Copy only agent source code (no tests)
+# Copy ONLY agent source (not pm_mcp - agent uses HTTP transport)
 COPY agent/ ./agent/
 
 # Set production environment
@@ -48,5 +48,5 @@ RUN useradd -m -u 1000 agent && \
 
 USER agent
 
-# Production entry point
-CMD ["python", "-m", "agent", "interactive"]
+# A2A server entry point
+CMD ["python", "-m", "agent"]

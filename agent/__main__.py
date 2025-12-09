@@ -1,6 +1,15 @@
-"""Entry point for PM Copilot Agent."""
+"""Entry point for PM Copilot A2A Agent."""
 
-from agent.cli import app
+import uvicorn
+
+from agent.core.config import AgentSettings
 
 if __name__ == "__main__":
-    app()
+    settings = AgentSettings()
+
+    uvicorn.run(
+        "agent.a2a.server:app",
+        host=settings.a2a_server_host,
+        port=settings.a2a_server_port,
+        reload=False,
+    )
