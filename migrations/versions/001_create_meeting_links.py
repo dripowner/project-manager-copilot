@@ -29,7 +29,7 @@ def upgrade() -> None:
         sa.Column("meeting_date", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
             "issue_keys",
-            sa.JSON(),
+            sa.dialects.postgresql.JSONB(),
             nullable=False,
             server_default=sa.text("'[]'::jsonb"),
         ),
@@ -73,7 +73,7 @@ def upgrade() -> None:
 
     # GIN index for searching within issue_keys JSONB array
     op.execute(
-        "CREATE INDEX idx_meeting_links_issues ON meeting_links USING GIN(issue_keys)"
+        "CREATE INDEX idx_meeting_links_issues ON meeting_links USING GIN(issue_keys jsonb_path_ops)"
     )
 
 
