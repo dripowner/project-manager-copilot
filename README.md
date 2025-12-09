@@ -81,6 +81,58 @@ docker compose up -d
 docker compose logs -f mcp-server
 ```
 
+## PM Copilot A2A Agent
+
+PM Copilot доступен через [A2A (Agent-to-Agent)](https://github.com/a2aproject/a2a-python) протокол для интеграции с другими AI агентами.
+
+### Запуск A2A сервера
+
+```bash
+# Локально (требуется запущенный MCP сервер)
+uv run python -m agent
+
+# Или через Docker (запускает весь стек)
+docker compose up -d agent-a2a
+```
+
+Сервер запустится на `http://localhost:8001`
+
+### A2A Endpoints
+
+- `POST /rpc` — JSON-RPC endpoint для A2A протокола
+- `GET /.well-known/agent-card.json` — Agent Card для discovery
+- `GET /health` — Health check
+
+### Agent Capabilities
+
+PM Copilot предоставляет следующие capabilities:
+
+1. **Sprint Planning** — планирование спринтов и управление бэклогом
+2. **Status Reporting** — генерация статус-репортов по проекту
+3. **Meeting Coordination** — управление встречами и action items
+4. **Issue Lifecycle** — полный lifecycle управления задачами Jira
+5. **Team Coordination** — координация команды и workload
+6. **Knowledge Search** — поиск информации в Confluence
+
+### Пример использования Agent Card
+
+```bash
+# Получить Agent Card
+curl http://localhost:8001/.well-known/agent-card.json
+
+# Ожидаемый ответ:
+{
+  "name": "PM Copilot Agent",
+  "description": "AI-powered assistant for project managers...",
+  "url": "http://localhost:8001",
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": false
+  },
+  "skills": [...]
+}
+```
+
 ## Подключение к Claude Desktop
 
 Добавьте в `claude_desktop_config.json`:

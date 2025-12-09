@@ -42,11 +42,46 @@ uv run alembic revision --autogenerate -m "description"
 ## Docker
 
 ```bash
-# Start full stack (postgres + migrations + mcp-server)
+# Start full stack (postgres + migrations + mcp-server + agent-a2a)
 docker compose up -d
 
 # Rebuild after code changes
 docker compose up -d --build mcp-server
+docker compose up -d --build agent-a2a
+```
+
+## A2A Agent Server
+
+PM Copilot is available via A2A (Agent-to-Agent) protocol.
+
+### Running Locally
+
+```bash
+# Start A2A server (requires running MCP server)
+uv run python -m agent
+```
+
+Server starts at http://localhost:8001
+
+### A2A Endpoints
+
+- `POST /rpc` - JSON-RPC endpoint for A2A protocol
+- `GET /.well-known/agent-card.json` - Agent Card for discovery
+- `GET /health` - Health check
+
+### Agent Capabilities
+
+1. **Sprint Planning** - Sprint planning and backlog management
+2. **Status Reporting** - Generate project status reports
+3. **Meeting Coordination** - Meeting and action items management
+4. **Issue Lifecycle** - Complete Jira issue lifecycle management
+5. **Team Coordination** - Team workload coordination
+6. **Knowledge Search** - Confluence knowledge base search
+
+### Testing Agent Card
+
+```bash
+curl http://localhost:8001/.well-known/agent-card.json
 ```
 
 ## Architecture
