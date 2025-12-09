@@ -20,36 +20,36 @@ class MCPClientWrapper:
 
         Args:
             server_config: Dictionary mapping server names to their configurations.
-                Each config should specify 'command', 'args', and 'transport'.
+                Each config should specify 'url' and 'transport' for HTTP,
+                or 'command' and 'args' for STDIO.
 
         Example:
             ```python
+            # HTTP transport (production)
             config = {
                 "pm-mcp-server": {
-                    "command": "python",
-                    "args": ["-m", "pm_mcp"],
-                    "transport": "stdio"
+                    "url": "http://localhost:8000/mcp",
+                    "transport": "http"
                 }
             }
             client = MCPClientWrapper(config)
+            tools = await client.get_tools()  # Stateless - creates ephemeral session
             ```
+
+        Note:
+            As of langchain-mcp-adapters 0.1.0+, MultiServerMCPClient is stateless.
+            Each tool invocation via get_tools() creates an ephemeral session that
+            automatically cleans up.
+
+            DO NOT use as async context manager - it raises NotImplementedError.
+            The wrapper no longer implements __aenter__/__aexit__ methods.
+
+            For persistent sessions, use client.client.session("server_name").
         """
         self.server_config = server_config
         self.client = MultiServerMCPClient(server_config)
         self._tools = None
-
-    async def __aenter__(self):
-        """Enter async context manager - connect to MCP servers."""
-        logger.info(f"Connecting to {len(self.server_config)} MCP server(s)...")
-        await self.client.__aenter__()
-        logger.info("MCP client connected successfully")
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Exit async context manager - disconnect from MCP servers."""
-        logger.info("Disconnecting from MCP servers...")
-        await self.client.__aexit__(exc_type, exc_val, exc_tb)
-        logger.info("MCP client disconnected")
+        logger.info(f"MCP client initialized with {len(self.server_config)} server(s)")
 
     async def get_tools(self) -> list:
         """Get all available tools from connected MCP servers.

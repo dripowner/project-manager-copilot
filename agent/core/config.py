@@ -64,6 +64,20 @@ class AgentSettings(BaseSettings):
         description="Default sprint name",
     )
 
+    # A2A Server Configuration
+    a2a_server_host: str = Field(
+        default="0.0.0.0",
+        description="A2A server host",
+    )
+    a2a_server_port: int = Field(
+        default=8001,
+        description="A2A server port",
+    )
+    a2a_server_base_url: str = Field(
+        default="http://localhost:8001",
+        description="A2A server base URL for Agent Card",
+    )
+
     @property
     def postgres_url(self) -> str:
         """Build PostgreSQL connection URL from components.
