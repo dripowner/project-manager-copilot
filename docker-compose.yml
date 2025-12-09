@@ -43,5 +43,39 @@ services:
     ports:
       - "8000:8000"
 
+  pm-agent:
+    build:
+      context: .
+      dockerfile: agent/Dockerfile
+      target: prod
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mcp-server:
+        condition: service_started
+    environment:
+      # PostgreSQL connection
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-pm_mcp}
+      POSTGRES_USER: ${POSTGRES_USER:-pm_mcp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pm_mcp_secret}
+      # MCP Server connection (HTTP mode for production)
+      MCP_SERVER_TRANSPORT: http
+      MCP_SERVER_URL: http://mcp-server:8000/mcp
+      # Agent settings
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.0}
+      MAX_ITERATIONS: ${MAX_ITERATIONS:-10}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      CHECKPOINTER_TYPE: postgres
+    env_file:
+      - .env
+    volumes:
+      - agent-logs:/app/logs
+    stdin_open: true
+    tty: true
+
 volumes:
   postgres_data:
+  agent-logs:
