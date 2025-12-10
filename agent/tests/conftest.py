@@ -19,7 +19,6 @@ def settings():
         mcp_server_transport="stdio",
         mcp_server_command="python",
         mcp_server_args=["-m", "pm_mcp"],
-        checkpointer_type="memory",
     )
 
 

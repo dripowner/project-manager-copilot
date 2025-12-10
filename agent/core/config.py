@@ -47,13 +47,6 @@ class AgentSettings(BaseSettings):
         description="MCP server URL (for http transport). Default uses Docker service name 'mcp-server'.",
     )
 
-    # PostgreSQL Configuration (shared with MCP server)
-    postgres_host: str = Field(default="localhost", description="PostgreSQL host")
-    postgres_port: int = Field(default=5432, description="PostgreSQL port")
-    postgres_db: str = Field(default="pm_mcp", description="PostgreSQL database name")
-    postgres_user: str = Field(default="pm_mcp", description="PostgreSQL user")
-    postgres_password: str = Field(default="", description="PostgreSQL password")
-
     # Project Context (optional defaults)
     default_project_key: str | None = Field(
         default=None,
@@ -77,29 +70,6 @@ class AgentSettings(BaseSettings):
         default="http://localhost:8001",
         description="A2A server base URL for Agent Card",
     )
-
-    @property
-    def postgres_url(self) -> str:
-        """Build PostgreSQL connection URL from components.
-
-        Returns:
-            PostgreSQL connection URL
-
-        Raises:
-            ValueError: If critical credentials (user or password) are missing
-        """
-        if not self.postgres_user:
-            raise ValueError(
-                "postgres_user is required for PostgreSQL connection. "
-                "Set POSTGRES_USER environment variable."
-            )
-        if not self.postgres_password:
-            raise ValueError(
-                "postgres_password is required for PostgreSQL connection. "
-                "Set POSTGRES_PASSWORD environment variable."
-            )
-
-        return f"postgresql://{self.postgres_user}:{self.postgres_password}@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
 
     model_config = SettingsConfigDict(
         env_file=".env",
