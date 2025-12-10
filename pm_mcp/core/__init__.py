@@ -1,6 +1,5 @@
-"""Core module - errors, models, database utilities."""
+"""Core module - errors, models."""
 
-from pm_mcp.core.database import DatabasePool, get_db_pool
 from pm_mcp.core.errors import (
     CalendarError,
     ConfluenceError,
@@ -14,9 +13,7 @@ __all__ = [
     "BaseMcpModel",
     "CalendarError",
     "ConfluenceError",
-    "DatabasePool",
     "JiraError",
     "McpError",
     "PmError",
-    "get_db_pool",
 ]
