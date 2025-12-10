@@ -8,14 +8,14 @@ PM MCP Server — an MCP (Model Context Protocol) server for project management 
 - **Jira**: Create/list/update issues, add comments
 - **Confluence**: Search pages, read content
 - **Google Calendar**: List meetings and events
-- **PM Layer**: Link meetings to Jira issues, track action items (PostgreSQL persistence)
+- **PM Layer**: Link meetings to Jira issues, track action items (Google Calendar + Jira Labels storage)
 
 Built with FastMCP 2.13+, uses streamable HTTP transport via Starlette/uvicorn.
 
 ## Development Commands
 
 ```bash
-# Install all dependencies (dev + mcp-server + migrations)
+# Install all dependencies (dev + mcp-server)
 uv sync --all-groups
 
 # Run server locally (requires .env with valid credentials)
@@ -33,16 +33,12 @@ uv run pytest pm_mcp/tests/test_jira_tools.py::test_jira_list_issues_success -v
 # Lint
 uv run ruff check pm_mcp/
 uv run ruff format pm_mcp/
-
-# Database migrations (requires DATABASE_URL env var)
-uv run alembic upgrade head
-uv run alembic revision --autogenerate -m "description"
 ```
 
 ## Docker
 
 ```bash
-# Start full stack (postgres + migrations + mcp-server + agent-a2a)
+# Start full stack (mcp-server + agent-a2a)
 docker compose up -d
 
 # Rebuild after code changes
@@ -98,6 +94,16 @@ mcp.jira_service = JiraService(settings)
 jira_service = ctx.fastmcp.jira_service
 ```
 
+### PM Layer Storage
+
+PM Layer uses **Google Calendar extendedProperties.private** + **Jira Labels** for bidirectional data storage:
+
+- **Meeting → Issues**: Calendar event's `extendedProperties.private` stores issue_keys, confluence_page_id, project_key as JSON
+- **Issue → Meetings**: Jira issues get `gcal:{event_id}` labels for reverse lookup
+- No external database required
+- Automatic cleanup when events are deleted
+- Size limit: ~8KB per event (validated before storage)
+
 ### Adding New Tools
 
 1. Create models in `pm_mcp/tools/<domain>/models.py` (Pydantic response models)
@@ -139,8 +145,7 @@ async def test_tool_success(mcp_client: Client, mock_service: MockService):
 
 - `pm_mcp/services/` — Business logic (Jira, Confluence, Calendar, PM APIs)
 - `pm_mcp/tools/` — MCP tool definitions (grouped by domain)
-- `pm_mcp/core/` — Database pool, error classes, shared models
-- `migrations/` — Alembic migrations for PM layer tables
+- `pm_mcp/core/` — Error classes, shared models
 
 ## Configuration
 
