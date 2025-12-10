@@ -1,6 +1,7 @@
 """Google Calendar API service."""
 
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -117,3 +118,118 @@ class CalendarService(BaseService):
             text_query,
             max_results,
         )
+
+    def _update_event_metadata_sync(
+        self,
+        event_id: str,
+        jira_issues: list[str],
+        confluence_page_id: str | None = None,
+        project_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Sync implementation of update event metadata."""
+        service = self._get_service()
+
+        # Валидация размера (превентивная проверка)
+        metadata = {
+            "jiraIssues": json.dumps(jira_issues),
+        }
+        if confluence_page_id:
+            metadata["confluencePageId"] = confluence_page_id
+        if project_key:
+            metadata["projectKey"] = project_key
+
+        # Проверка размера (Google API лимит ~8KB для extendedProperties)
+        metadata_size = len(json.dumps(metadata))
+        if metadata_size > 7000:  # Safety margin
+            raise ValueError(
+                f"Metadata size ({metadata_size} bytes) exceeds safe limit. "
+                f"Consider reducing number of linked issues (current: {len(jira_issues)})"
+            )
+
+        try:
+            event = (
+                service.events()
+                .patch(
+                    calendarId="primary",  # Публичный календарь команды
+                    eventId=event_id,
+                    body={"extendedProperties": {"private": metadata}},
+                )
+                .execute()
+            )
+            return event
+
+        except HttpError as e:
+            self._log_error("update_event_metadata", e)
+            raise CalendarError(
+                message=f"Failed to update event metadata: {e.reason}",
+                details={"status_code": e.resp.status, "event_id": event_id},
+            ) from e
+        except Exception as e:
+            self._log_error("update_event_metadata", e)
+            raise CalendarError(
+                message=f"Failed to update event metadata: {e}",
+                details={"event_id": event_id},
+            ) from e
+
+    async def update_event_metadata(
+        self,
+        event_id: str,
+        jira_issues: list[str],
+        confluence_page_id: str | None = None,
+        project_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Update event with PM metadata using extendedProperties.private."""
+        return await asyncio.to_thread(
+            self._update_event_metadata_sync,
+            event_id,
+            jira_issues,
+            confluence_page_id,
+            project_key,
+        )
+
+    def _get_event_metadata_sync(self, event_id: str) -> dict[str, Any]:
+        """Sync implementation of get event metadata."""
+        service = self._get_service()
+
+        try:
+            event = (
+                service.events().get(calendarId="primary", eventId=event_id).execute()
+            )
+
+            private_props = event.get("extendedProperties", {}).get("private", {})
+
+            return {
+                "meeting_id": event_id,
+                "issue_keys": json.loads(private_props.get("jiraIssues", "[]")),
+                "confluence_page_id": private_props.get("confluencePageId"),
+                "project_key": private_props.get("projectKey"),
+                "meeting_title": event.get("summary"),
+                "meeting_date": event.get("start", {}).get("dateTime"),
+            }
+
+        except HttpError as e:
+            # Handle 404 - event not found
+            if e.resp.status == 404:
+                return {
+                    "meeting_id": event_id,
+                    "issue_keys": [],
+                    "confluence_page_id": None,
+                    "project_key": None,
+                    "meeting_title": None,
+                    "meeting_date": None,
+                }
+            self._log_error("get_event_metadata", e)
+            raise CalendarError(
+                message=f"Failed to get event metadata: {e.reason}",
+                details={"status_code": e.resp.status, "event_id": event_id},
+            ) from e
+        except Exception as e:
+            self._log_error("get_event_metadata", e)
+            raise CalendarError(
+                message=f"Failed to get event metadata: {e}",
+                details={"event_id": event_id},
+            ) from e
+
+    async def get_event_metadata(self, event_id: str) -> dict[str, Any]:
+        """Get PM metadata from event extendedProperties.private."""
+        return await asyncio.to_thread(self._get_event_metadata_sync, event_id)

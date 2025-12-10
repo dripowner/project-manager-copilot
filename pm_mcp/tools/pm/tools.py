@@ -60,14 +60,23 @@ def register_pm_tools(mcp: FastMCP) -> None:
         )
         try:
             pm_service = ctx.fastmcp.pm_service  # type: ignore[attr-defined]
+            calendar_service = ctx.fastmcp.calendar_service  # type: ignore[attr-defined]
+            jira_service = ctx.fastmcp.jira_service  # type: ignore[attr-defined]
+
             if pm_service is None:
-                raise ToolError("PM service not available - database not initialized")
+                raise ToolError("PM service not available")
+            if calendar_service is None:
+                raise ToolError("Calendar service not available")
+            if jira_service is None:
+                raise ToolError("Jira service not available")
 
             await ctx.debug(
                 f"Issue keys: {jira_issue_keys}, "
                 f"confluence_page_id={confluence_page_id}"
             )
             result = await pm_service.link_meeting_issues(
+                calendar_service=calendar_service,
+                jira_service=jira_service,
                 meeting_id=calendar_event_id,
                 issue_keys=jira_issue_keys,
                 confluence_page_id=confluence_page_id,
@@ -75,6 +84,12 @@ def register_pm_tools(mcp: FastMCP) -> None:
                 meeting_date=meeting_date,
                 project_key=project_key,
             )
+
+            # Предупредить если были ошибки с labels
+            if "label_errors" in result:
+                await ctx.warning(
+                    f"Some Jira labels failed to add: {result['label_errors']}"
+                )
 
             await ctx.info("Successfully linked meeting to issues")
             return PmLinkMeetingIssuesResponse(
@@ -105,13 +120,17 @@ def register_pm_tools(mcp: FastMCP) -> None:
         await ctx.info(f"Getting issues linked to meeting: {calendar_event_id}")
         try:
             pm_service = ctx.fastmcp.pm_service  # type: ignore[attr-defined]
+            calendar_service = ctx.fastmcp.calendar_service  # type: ignore[attr-defined]
             jira_service = ctx.fastmcp.jira_service  # type: ignore[attr-defined]
 
             if pm_service is None:
-                raise ToolError("PM service not available - database not initialized")
+                raise ToolError("PM service not available")
+            if calendar_service is None:
+                raise ToolError("Calendar service not available")
 
-            # Get meeting link data
+            # Get meeting link data from Calendar
             meeting_data = await pm_service.get_meeting_issues(
+                calendar_service=calendar_service,
                 meeting_id=calendar_event_id
             )
 
@@ -167,7 +186,7 @@ def register_pm_tools(mcp: FastMCP) -> None:
             jira_service = ctx.fastmcp.jira_service  # type: ignore[attr-defined]
 
             if pm_service is None:
-                raise ToolError("PM service not available - database not initialized")
+                raise ToolError("PM service not available")
 
             if since:
                 await ctx.debug(f"Calculating progress since: {since}")

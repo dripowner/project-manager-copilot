@@ -410,3 +410,107 @@ class JiraService(BaseService):
     async def get_issue(self, issue_key: str) -> dict[str, Any] | None:
         """Get a single Jira issue by key asynchronously."""
         return await asyncio.to_thread(self._get_issue_sync, issue_key)
+
+    def _add_meeting_label_sync(
+        self,
+        issue_key: str,
+        meeting_id: str,
+    ) -> dict[str, Any]:
+        """Sync implementation of add meeting label."""
+        label = f"gcal:{meeting_id}"
+        client = self._get_client()
+
+        try:
+            issue = client.issue(issue_key)
+            current_labels = issue["fields"]["labels"] or []
+
+            # Add new label if not exists
+            if label not in current_labels:
+                current_labels.append(label)
+                client.update_issue_field(issue_key, {"labels": current_labels})
+
+            return {"issue_key": issue_key, "label": label, "added": True}
+
+        except HTTPError as e:
+            self._log_error("add_meeting_label", e)
+            raise JiraError(
+                message=f"Failed to add meeting label. Check issue key and permissions.",
+                details={"operation": "add_meeting_label", "issue_key": issue_key},
+            ) from e
+        except Exception as e:
+            self._log_error("add_meeting_label", e)
+            raise JiraError(
+                message=f"Failed to add meeting label: {e}",
+                details={"operation": "add_meeting_label"},
+            ) from e
+
+    async def add_meeting_label(
+        self,
+        issue_key: str,
+        meeting_id: str,
+    ) -> dict[str, Any]:
+        """Add gcal:meeting_id label to Jira issue for reverse lookup."""
+        return await asyncio.to_thread(
+            self._add_meeting_label_sync,
+            issue_key,
+            meeting_id,
+        )
+
+    def _remove_meeting_label_sync(
+        self,
+        issue_key: str,
+        meeting_id: str,
+    ) -> dict[str, Any]:
+        """Sync implementation of remove meeting label."""
+        label = f"gcal:{meeting_id}"
+        client = self._get_client()
+
+        try:
+            issue = client.issue(issue_key)
+            current_labels = issue["fields"]["labels"] or []
+
+            # Remove label if exists
+            if label in current_labels:
+                current_labels.remove(label)
+                client.update_issue_field(issue_key, {"labels": current_labels})
+                return {"issue_key": issue_key, "label": label, "removed": True}
+
+            return {"issue_key": issue_key, "label": label, "removed": False}
+
+        except HTTPError as e:
+            self._log_error("remove_meeting_label", e)
+            raise JiraError(
+                message=f"Failed to remove meeting label. Check issue key and permissions.",
+                details={"operation": "remove_meeting_label", "issue_key": issue_key},
+            ) from e
+        except Exception as e:
+            self._log_error("remove_meeting_label", e)
+            raise JiraError(
+                message=f"Failed to remove meeting label: {e}",
+                details={"operation": "remove_meeting_label"},
+            ) from e
+
+    async def remove_meeting_label(
+        self,
+        issue_key: str,
+        meeting_id: str,
+    ) -> dict[str, Any]:
+        """Remove gcal:meeting_id label from Jira issue."""
+        return await asyncio.to_thread(
+            self._remove_meeting_label_sync,
+            issue_key,
+            meeting_id,
+        )
+
+    async def find_issues_by_meeting(
+        self,
+        meeting_id: str,
+        project_key: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Find all issues linked to a meeting via gcal: labels."""
+        # Use label as a filter through list_issues
+        return await self.list_issues(
+            labels=[f"gcal:{meeting_id}"],
+            project_key=project_key,
+            max_results=100,
+        )
