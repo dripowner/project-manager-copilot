@@ -104,6 +104,52 @@ PM Layer uses **Google Calendar extendedProperties.private** + **Jira Labels** f
 - Automatic cleanup when events are deleted
 - Size limit: ~8KB per event (validated before storage)
 
+### Agent Storage Architecture
+
+PM Copilot Agent (A2A server) uses **in-memory storage** for both conversation state and task metadata:
+
+#### Conversation Checkpointing (MemorySaver)
+
+- Implementation: `MemorySaver` from LangGraph
+- Location: `agent/core/checkpointer.py`
+- Persistence: None (lost on restart)
+- Purpose: Track conversation state within a single agent session
+
+#### Task Metadata Store (InMemoryTaskStore)
+
+- Implementation: `InMemoryTaskStore` from a2a-sdk
+- Location: `agent/a2a/server.py`
+- Persistence: None (lost on restart)
+- Purpose: Store A2A task metadata during agent execution
+
+#### Important notes
+
+- Both conversation history and task metadata are ephemeral (in-memory only)
+- All state is lost when agent restarts
+- No database dependencies required
+- Suitable for stateless A2A protocol interactions
+
+#### Operational Implications
+
+**When to use in-memory storage:**
+
+- Development and testing environments
+- Stateless agents where each interaction is independent
+- Single-instance deployments without load balancing
+- Short-lived conversations (seconds to minutes)
+
+**Limitations to be aware of:**
+
+- **No conversation replay**: Previous conversations cannot be resumed or debugged after restart
+- **Tasks must complete before restart**: In-flight A2A tasks are lost on agent shutdown
+- **Not suitable for**: Multi-hour conversations, distributed/load-balanced deployments, or production environments requiring audit trails
+- **Debugging constraints**: Cannot inspect conversation history after crashes
+
+**Migration to persistent storage**: If you need persistence, switch to:
+
+- Conversation state: PostgresSaver (langgraph-checkpoint-postgres)
+- Task metadata: DatabaseTaskStore with a2a-sdk[sql]
+
 ### Adding New Tools
 
 1. Create models in `pm_mcp/tools/<domain>/models.py` (Pydantic response models)

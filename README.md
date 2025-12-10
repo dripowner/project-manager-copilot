@@ -13,7 +13,6 @@ MCP-сервер для интеграции инструментов проек
 
 - Python 3.11+
 - [uv](https://github.com/astral-sh/uv) — менеджер пакетов
-- PostgreSQL 16+ (для PM Layer)
 
 ## Установка
 
@@ -39,13 +38,6 @@ ATLASSIAN_API_TOKEN=your-api-token
 ATLASSIAN_EMAIL=your-email@example.com
 JIRA_BASE_URL=https://your-domain.atlassian.net
 CONFLUENCE_BASE_URL=https://your-domain.atlassian.net/wiki
-
-# PostgreSQL (для PM Layer)
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5432
-POSTGRES_DB=pm_mcp
-POSTGRES_USER=pm_mcp
-POSTGRES_PASSWORD=your-password
 
 # Google Calendar
 GOOGLE_CALENDAR_ID=your-calendar-id
