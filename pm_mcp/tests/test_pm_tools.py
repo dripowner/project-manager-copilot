@@ -3,15 +3,25 @@
 import pytest
 from fastmcp import Client
 
-from pm_mcp.tests.mocks.mock_services import MockDatabasePool, MockJiraService
+from pm_mcp.tests.mocks.mock_services import (
+    MockCalendarService,
+    MockJiraService,
+)
 
 
 @pytest.mark.asyncio
 async def test_pm_link_meeting_issues(
     mcp_client: Client,
-    mock_db_pool: MockDatabasePool,
+    mock_calendar_service: MockCalendarService,
 ) -> None:
     """Test linking meeting to issues."""
+    # Setup: create mock event
+    mock_calendar_service.set_event(
+        event_id="event123",
+        summary="Sprint Planning",
+        start_datetime="2024-01-15T10:00:00Z",
+    )
+
     result = await mcp_client.call_tool(
         "pm_link_meeting_issues",
         {
@@ -24,13 +34,25 @@ async def test_pm_link_meeting_issues(
 
     assert result is not None
 
+    # Verify metadata was stored
+    metadata = await mock_calendar_service.get_event_metadata("event123")
+    assert metadata["issue_keys"] == ["PROJ-1", "PROJ-2"]
+    assert metadata["confluence_page_id"] == "page456"
+
 
 @pytest.mark.asyncio
 async def test_pm_link_meeting_issues_minimal(
     mcp_client: Client,
-    mock_db_pool: MockDatabasePool,
+    mock_calendar_service: MockCalendarService,
 ) -> None:
     """Test linking meeting with minimal data."""
+    # Setup: create mock event
+    mock_calendar_service.set_event(
+        event_id="event789",
+        summary="Team Sync",
+        start_datetime="2024-01-16T14:00:00Z",
+    )
+
     result = await mcp_client.call_tool(
         "pm_link_meeting_issues",
         {
@@ -41,25 +63,29 @@ async def test_pm_link_meeting_issues_minimal(
 
     assert result is not None
 
+    # Verify metadata was stored
+    metadata = await mock_calendar_service.get_event_metadata("event789")
+    assert metadata["issue_keys"] == ["PROJ-3"]
+
 
 @pytest.mark.asyncio
 async def test_pm_get_meeting_issues(
     mcp_client: Client,
-    mock_db_pool: MockDatabasePool,
+    mock_calendar_service: MockCalendarService,
     mock_jira_service: MockJiraService,
 ) -> None:
     """Test getting issues for a meeting."""
-    # Setup mock data
-    mock_db_pool.set_meeting_data(
-        "event123",
-        {
-            "meeting_id": "event123",
-            "confluence_page_id": "page456",
-            "meeting_title": "Sprint Planning",
-            "meeting_date": None,
-            "issue_keys": '["PROJ-1", "PROJ-2"]',
-            "project_key": "PROJ",
-        },
+    # Setup: create event with metadata
+    mock_calendar_service.set_event(
+        event_id="event123",
+        summary="Sprint Planning",
+        start_datetime="2024-01-15T10:00:00Z",
+    )
+    await mock_calendar_service.update_event_metadata(
+        event_id="event123",
+        jira_issues=["PROJ-1", "PROJ-2"],
+        confluence_page_id="page456",
+        project_key="PROJ",
     )
 
     result = await mcp_client.call_tool(
@@ -73,7 +99,6 @@ async def test_pm_get_meeting_issues(
 @pytest.mark.asyncio
 async def test_pm_get_meeting_issues_not_found(
     mcp_client: Client,
-    mock_db_pool: MockDatabasePool,
 ) -> None:
     """Test getting issues for non-existent meeting."""
     result = await mcp_client.call_tool(

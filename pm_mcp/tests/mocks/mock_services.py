@@ -1,14 +1,34 @@
 """Mock implementations of services for testing."""
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 
 class MockCalendarService:
-    """Mock Google Calendar service."""
+    """Mock Google Calendar service with extendedProperties support."""
 
     def __init__(self) -> None:
         self.list_events = AsyncMock(return_value=self._default_events())
+        self.update_event_metadata = AsyncMock(side_effect=self._update_event_metadata)
+        self.get_event_metadata = AsyncMock(side_effect=self._get_event_metadata)
+
+        # In-memory storage: event_id -> extendedProperties.private
+        self._events_metadata: dict[str, dict[str, Any]] = {}
+
+        # Mock events data (for get_event_metadata)
+        self._events: dict[str, dict[str, Any]] = {
+            "event1": {
+                "id": "event1",
+                "summary": "Sprint Planning",
+                "start": {"dateTime": "2024-01-15T10:00:00+00:00"},
+            },
+            "event2": {
+                "id": "event2",
+                "summary": "Retrospective",
+                "start": {"dateTime": "2024-01-16T14:00:00+00:00"},
+            },
+        }
 
     def _default_events(self) -> list[dict[str, Any]]:
         return [
@@ -31,6 +51,48 @@ class MockCalendarService:
                 "attendees": None,
             },
         ]
+
+    def set_event(self, event_id: str, summary: str, start_datetime: str) -> None:
+        """Set mock event data."""
+        self._events[event_id] = {
+            "id": event_id,
+            "summary": summary,
+            "start": {"dateTime": start_datetime},
+        }
+
+    async def _update_event_metadata(
+        self,
+        event_id: str,
+        jira_issues: list[str],
+        confluence_page_id: str | None = None,
+        project_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Mock update event metadata."""
+        metadata = {
+            "jiraIssues": json.dumps(jira_issues),
+        }
+        if confluence_page_id:
+            metadata["confluencePageId"] = confluence_page_id
+        if project_key:
+            metadata["projectKey"] = project_key
+
+        self._events_metadata[event_id] = metadata
+
+        return {"id": event_id, "extendedProperties": {"private": metadata}}
+
+    async def _get_event_metadata(self, event_id: str) -> dict[str, Any]:
+        """Mock get event metadata."""
+        private_props = self._events_metadata.get(event_id, {})
+        event_data = self._events.get(event_id, {})
+
+        return {
+            "meeting_id": event_id,
+            "issue_keys": json.loads(private_props.get("jiraIssues", "[]")),
+            "confluence_page_id": private_props.get("confluencePageId"),
+            "project_key": private_props.get("projectKey"),
+            "meeting_title": event_data.get("summary"),
+            "meeting_date": event_data.get("start", {}).get("dateTime"),
+        }
 
 
 class MockJiraService:
@@ -102,6 +164,40 @@ class MockJiraService:
         """Get issue by key from mock data."""
         return self._issues_by_key.get(issue_key)
 
+    async def add_meeting_label(
+        self, issue_key: str, meeting_id: str
+    ) -> dict[str, Any]:
+        """Mock add meeting label."""
+        label = f"gcal:{meeting_id}"
+        issue = self._issues_by_key.get(issue_key)
+        if issue:
+            if label not in issue["labels"]:
+                issue["labels"].append(label)
+        return {"issue_key": issue_key, "label": label, "added": True}
+
+    async def remove_meeting_label(
+        self, issue_key: str, meeting_id: str
+    ) -> dict[str, Any]:
+        """Mock remove meeting label."""
+        label = f"gcal:{meeting_id}"
+        issue = self._issues_by_key.get(issue_key)
+        if issue and label in issue["labels"]:
+            issue["labels"].remove(label)
+            return {"issue_key": issue_key, "label": label, "removed": True}
+        return {"issue_key": issue_key, "label": label, "removed": False}
+
+    async def find_issues_by_meeting(
+        self, meeting_id: str, project_key: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Mock find issues by meeting."""
+        label = f"gcal:{meeting_id}"
+        results = []
+        for issue in self._issues_by_key.values():
+            if label in issue["labels"]:
+                if project_key is None or issue["key"].startswith(project_key):
+                    results.append(issue)
+        return results
+
 
 class MockConfluenceService:
     """Mock Confluence service."""
@@ -150,53 +246,3 @@ Decisions:
         }
 
 
-class MockDatabasePool:
-    """Mock database pool for testing."""
-
-    def __init__(self) -> None:
-        self._data: dict[str, dict[str, Any]] = {}
-        self._connection = MagicMock()
-        self._connection.execute = AsyncMock()
-        self._connection.fetchrow = AsyncMock(side_effect=self._fetchrow)
-        self._connection.fetch = AsyncMock(return_value=[])
-
-    async def init(self) -> None:
-        """Initialize mock pool."""
-        pass
-
-    async def close(self) -> None:
-        """Close mock pool."""
-        pass
-
-    @property
-    def pool(self) -> MagicMock:
-        """Get mock pool."""
-        return MagicMock()
-
-    class _ConnectionContext:
-        def __init__(self, conn: MagicMock) -> None:
-            self.conn = conn
-
-        async def __aenter__(self) -> MagicMock:
-            return self.conn
-
-        async def __aexit__(self, *args: Any) -> None:
-            pass
-
-    def connection(self) -> "_ConnectionContext":
-        """Get mock connection context."""
-        return self._ConnectionContext(self._connection)
-
-    def transaction(self) -> "_ConnectionContext":
-        """Get mock transaction context."""
-        return self._ConnectionContext(self._connection)
-
-    async def _fetchrow(self, query: str, *args: Any) -> dict[str, Any] | None:
-        """Mock fetchrow that returns stored data."""
-        if args and args[0] in self._data:
-            return self._data[args[0]]
-        return None
-
-    def set_meeting_data(self, meeting_id: str, data: dict[str, Any]) -> None:
-        """Set mock data for a meeting."""
-        self._data[meeting_id] = data

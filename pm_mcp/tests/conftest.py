@@ -9,7 +9,6 @@ from pm_mcp.services.pm_service import PmService
 from pm_mcp.tests.mocks.mock_services import (
     MockCalendarService,
     MockConfluenceService,
-    MockDatabasePool,
     MockJiraService,
 )
 from pm_mcp.tools.calendar import register_calendar_tools
@@ -37,15 +36,9 @@ def mock_confluence_service() -> MockConfluenceService:
 
 
 @pytest.fixture
-def mock_db_pool() -> MockDatabasePool:
-    """Create mock database pool."""
-    return MockDatabasePool()
-
-
-@pytest.fixture
-def mock_pm_service(mock_db_pool: MockDatabasePool) -> PmService:
-    """Create PM service with mock database."""
-    return PmService(db_pool=mock_db_pool)  # type: ignore[arg-type]
+def mock_pm_service() -> PmService:
+    """Create PM service."""
+    return PmService()
 
 
 @pytest.fixture
