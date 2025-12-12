@@ -19,6 +19,8 @@ MCP-сервер для интеграции инструментов проек
 
 ## Быстрый старт
 
+### Локальная разработка
+
 ```bash
 # 1. Клонирование репозитория
 git clone <repository-url>
@@ -28,7 +30,7 @@ cd cloudru-mcp
 uv sync --all-groups
 
 # 3. Копирование конфигурации
-cp .env.example .env
+cp .env.example.local .env
 
 # 4. Заполните .env файл (см. раздел "Конфигурация")
 
@@ -37,6 +39,25 @@ uv run python -m pm_mcp
 
 # 6. (Опционально) Запуск A2A агента в другом терминале
 uv run python -m agent
+```
+
+### Docker Compose (рекомендуется)
+
+```bash
+# 1. Клонирование репозитория
+git clone <repository-url>
+cd cloudru-mcp
+
+# 2. Копирование конфигурации
+cp .env.example.local .env
+
+# 3. Заполните .env файл (см. раздел "Конфигурация")
+
+# 4. Запуск всего стека
+docker compose up -d
+
+# 5. Просмотр логов
+docker compose logs -f
 ```
 
 ## Конфигурация
