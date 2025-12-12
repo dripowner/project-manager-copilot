@@ -19,6 +19,7 @@ class PmService(BaseService):
         self,
         calendar_service: Any,  # CalendarService
         jira_service: Any,  # JiraService for labels
+        calendar_id: str,
         meeting_id: str,
         issue_keys: list[str],
         confluence_page_id: str | None = None,
@@ -30,6 +31,7 @@ class PmService(BaseService):
         try:
             # Step 1: Update Calendar event with issue keys (meeting → issues)
             await calendar_service.update_event_metadata(
+                calendar_id=calendar_id,
                 event_id=meeting_id,
                 jira_issues=issue_keys,
                 confluence_page_id=confluence_page_id,
@@ -70,11 +72,12 @@ class PmService(BaseService):
     async def get_meeting_issues(
         self,
         calendar_service: Any,  # CalendarService
+        calendar_id: str,
         meeting_id: str,
     ) -> dict[str, Any]:
         """Get issues linked to meeting from Calendar."""
         try:
-            return await calendar_service.get_event_metadata(meeting_id)
+            return await calendar_service.get_event_metadata(calendar_id, meeting_id)
 
         except Exception as e:
             self._log_error("get_meeting_issues", e)

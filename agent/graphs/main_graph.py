@@ -1,16 +1,23 @@
-"""Main workflow graph for PM Copilot Agent."""
+"""Unified main workflow graph for PM Copilot Agent with Command routing."""
 
 import logging
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.graph import StateGraph, END
+from langgraph.graph import StateGraph, START
 
 from agent.core.config import AgentSettings
 from agent.core.mcp_client import MCPClientWrapper
 from agent.core.state import AgentState
-from agent.graphs.plan_execute import create_plan_execute_subgraph
-from agent.nodes.router import router_node
-from agent.nodes.simple_react import create_simple_react_node, simple_react_node
+
+# Import all 8 nodes
+from agent.nodes.ask_project_key import ask_project_key
+from agent.nodes.conversation_router import conversation_router
+from agent.nodes.plan_executor import plan_executor
+from agent.nodes.project_detector import project_detector
+from agent.nodes.simple_chat_response import simple_chat_response
+from agent.nodes.simple_executor import simple_executor
+from agent.nodes.task_router import task_router
+from agent.nodes.tool_validator import tool_validator
 
 logger = logging.getLogger(__name__)
 
@@ -20,82 +27,84 @@ async def create_main_graph(
     settings: AgentSettings,
     checkpointer: BaseCheckpointSaver | None = None,
 ):
-    """Create the main workflow graph for PM Copilot Agent.
+    """Create the unified workflow graph for PM Copilot Agent.
 
-    Phase 4: Full graph with router, simple ReAct, plan-execute, and checkpointing.
-    Routes between simple ReAct execution and plan-execute workflows with persistent state.
+    This is a single unified graph with Command-based routing (no conditional_edges).
+    The graph uses 8 nodes with early classification to separate simple chat from PM work:
+
+    Flow:
+    START → conversation_router →
+      [if chat] → simple_chat_response → END
+      [if PM work] → project_detector → task_router → tool_validator →
+        [if missing project_key] → ask_project_key → END
+        [if valid] → simple_executor / plan_executor → END
 
     Args:
         mcp_client: Connected MCP client with available tools
         settings: Agent configuration settings
-        checkpointer: Optional checkpointer for persistent state (PostgreSQL or in-memory)
+        checkpointer: Optional checkpointer for persistent state (default: in-memory)
 
     Returns:
-        Compiled LangGraph workflow
+        Compiled LangGraph workflow with Command routing
     """
-    logger.info("Creating main workflow graph with router and plan-execute")
+    logger.info("Creating unified workflow graph with Command routing (8 nodes)")
 
-    # Get tools from MCP client
-    tools = await mcp_client.get_tools()
-    logger.info(f"Available tools: {await mcp_client.list_tool_names()}")
-
-    # Create Simple ReAct agent
-    simple_agent = create_simple_react_node(tools, settings)
-
-    # Create plan-execute subgraph
-    plan_execute_graph = create_plan_execute_subgraph(tools, simple_agent, settings)
-
-    # Create workflow graph
+    # Build graph
     workflow = StateGraph(AgentState)
 
-    # Node wrappers
-    async def router_wrapper(state: AgentState) -> dict:
-        return await router_node(state, settings)
+    # Node wrappers to inject dependencies
+    async def conversation_router_wrapper(state: AgentState):
+        return await conversation_router(state, settings)
 
-    async def simple_react_wrapper(state: AgentState) -> dict:
-        return await simple_react_node(state, simple_agent, settings.max_iterations)
+    async def simple_chat_response_wrapper(state: AgentState):
+        return await simple_chat_response(state, settings)
 
-    async def plan_execute_wrapper(state: AgentState) -> dict:
-        """Execute plan-execute subgraph."""
-        logger.info("Plan-execute mode invoked")
-        result = await plan_execute_graph.ainvoke(state)
-        return result
+    async def project_detector_wrapper(state: AgentState):
+        return await project_detector(state, settings)
 
-    # Add nodes
-    workflow.add_node("router", router_wrapper)
-    workflow.add_node("simple_react", simple_react_wrapper)
-    workflow.add_node("plan_execute", plan_execute_wrapper)
+    async def task_router_wrapper(state: AgentState):
+        return await task_router(state, settings)
 
-    # Set entry point (start at router)
-    workflow.set_entry_point("router")
+    async def tool_validator_wrapper(state: AgentState):
+        return await tool_validator(state, settings, mcp_client)
 
-    # Conditional routing based on mode
-    def route_by_mode(state: AgentState) -> str:
-        """Route to simple_react or plan_execute based on mode."""
-        mode = state.get("mode", "simple")
-        logger.info(f"Routing to: {mode}")
-        return mode
+    async def ask_project_key_wrapper(state: AgentState):
+        return await ask_project_key(state)
 
-    workflow.add_conditional_edges(
-        "router",
-        route_by_mode,
-        {
-            "simple": "simple_react",
-            "plan_execute": "plan_execute",
-        },
-    )
+    async def simple_executor_wrapper(state: AgentState):
+        return await simple_executor(state, settings, mcp_client)
 
-    # Both execution paths end the graph
-    workflow.add_edge("simple_react", END)
-    workflow.add_edge("plan_execute", END)
+    async def plan_executor_wrapper(state: AgentState):
+        return await plan_executor(state, settings, mcp_client)
+
+    # Add all 8 nodes
+    workflow.add_node("conversation_router", conversation_router_wrapper)
+    workflow.add_node("simple_chat_response", simple_chat_response_wrapper)
+    workflow.add_node("project_detector", project_detector_wrapper)
+    workflow.add_node("task_router", task_router_wrapper)
+    workflow.add_node("tool_validator", tool_validator_wrapper)
+    workflow.add_node("ask_project_key", ask_project_key_wrapper)
+    workflow.add_node("simple_executor", simple_executor_wrapper)
+    workflow.add_node("plan_executor", plan_executor_wrapper)
+
+    # Entry point - early classification!
+    workflow.add_edge(START, "conversation_router")
+
+    logger.info("All 8 nodes added to graph")
+
+    # All routing handled by Command returns - NO conditional_edges!
+    logger.info("Graph routing: all via Command pattern (no conditional_edges)")
 
     # Compile with checkpointer
     if checkpointer:
         logger.info(f"Compiling graph with checkpointer: {type(checkpointer).__name__}")
     else:
-        logger.info("Compiling graph without checkpointer (stateless mode)")
+        logger.info("Compiling graph without checkpointer (in-memory mode)")
 
-    graph = workflow.compile(checkpointer=checkpointer)
+    graph = workflow.compile(
+        checkpointer=checkpointer,
+        interrupt_before=[],  # No interrupts needed - ask_project_key handles user wait
+    )
 
-    logger.info("Main workflow graph created successfully")
+    logger.info("Unified workflow graph created successfully with Command routing")
     return graph

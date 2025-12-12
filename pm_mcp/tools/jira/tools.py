@@ -8,6 +8,7 @@ from fastmcp.server.context import Context
 from pydantic import Field
 
 from pm_mcp.core.errors import JiraError
+from pm_mcp.core.metrics import TOOL_CALLS, TOOL_DURATION
 from pm_mcp.tools.jira.models import (
     JiraAddCommentResponse,
     JiraCreateIssuesBatchResponse,
@@ -66,33 +67,37 @@ def register_jira_tools(mcp: FastMCP) -> None:
         ] = 50,
     ) -> JiraListIssuesResponse:
         """List Jira issues with filters."""
-        await ctx.info(f"Listing Jira issues for project: {project_key}")
-        try:
-            jira_service = ctx.fastmcp.jira_service  # type: ignore[attr-defined]
-            await ctx.debug(
-                f"Filters: status_category={status_category}, assignee={assignee}, "
-                f"labels={labels}, text_query={text_query}"
-            )
-            issues = await jira_service.list_issues(
-                project_key=project_key,
-                status_category=status_category,
-                assignee=assignee,
-                labels=labels,
-                updated_from=updated_from,
-                updated_to=updated_to,
-                text_query=text_query,
-                max_results=max_results,
-            )
+        with TOOL_DURATION.labels(tool_name="jira_list_issues").time():
+            await ctx.info(f"Listing Jira issues for project: {project_key}")
+            try:
+                jira_service = ctx.fastmcp.jira_service  # type: ignore[attr-defined]
+                await ctx.debug(
+                    f"Filters: status_category={status_category}, assignee={assignee}, "
+                    f"labels={labels}, text_query={text_query}"
+                )
+                issues = await jira_service.list_issues(
+                    project_key=project_key,
+                    status_category=status_category,
+                    assignee=assignee,
+                    labels=labels,
+                    updated_from=updated_from,
+                    updated_to=updated_to,
+                    text_query=text_query,
+                    max_results=max_results,
+                )
 
-            await ctx.info(f"Found {len(issues)} Jira issues")
-            return JiraListIssuesResponse(
-                issues=[JiraIssueSummary(**issue) for issue in issues]
-            )
+                await ctx.info(f"Found {len(issues)} Jira issues")
+                TOOL_CALLS.labels(tool_name="jira_list_issues", status="success").inc()
+                return JiraListIssuesResponse(
+                    issues=[JiraIssueSummary(**issue) for issue in issues]
+                )
 
-        except JiraError as e:
-            raise ToolError(e.message) from e
-        except Exception as e:
-            raise ToolError(f"Failed to list Jira issues: {e}") from e
+            except JiraError as e:
+                TOOL_CALLS.labels(tool_name="jira_list_issues", status="error").inc()
+                raise ToolError(e.message) from e
+            except Exception as e:
+                TOOL_CALLS.labels(tool_name="jira_list_issues", status="error").inc()
+                raise ToolError(f"Failed to list Jira issues: {e}") from e
 
     @mcp.tool(
         name="jira_create_issues_batch",
@@ -108,27 +113,39 @@ def register_jira_tools(mcp: FastMCP) -> None:
         ctx: Context,
     ) -> JiraCreateIssuesBatchResponse:
         """Create multiple Jira issues."""
-        await ctx.info(f"Creating {len(issues)} Jira issues in project: {project_key}")
-        try:
-            jira_service = ctx.fastmcp.jira_service  # type: ignore[attr-defined]
-            # Convert to dict for service
-            issues_data = [issue.model_dump() for issue in issues]
-
-            await ctx.debug(f"Issue summaries: {[i.summary for i in issues]}")
-            created = await jira_service.create_issues_batch(
-                project_key=project_key,
-                issues=issues_data,
+        with TOOL_DURATION.labels(tool_name="jira_create_issues_batch").time():
+            await ctx.info(
+                f"Creating {len(issues)} Jira issues in project: {project_key}"
             )
+            try:
+                jira_service = ctx.fastmcp.jira_service  # type: ignore[attr-defined]
+                # Convert to dict for service
+                issues_data = [issue.model_dump() for issue in issues]
 
-            await ctx.info(f"Successfully created {len(created)} issues")
-            return JiraCreateIssuesBatchResponse(
-                created=[JiraCreatedIssue(**issue) for issue in created]
-            )
+                await ctx.debug(f"Issue summaries: {[i.summary for i in issues]}")
+                created = await jira_service.create_issues_batch(
+                    project_key=project_key,
+                    issues=issues_data,
+                )
 
-        except JiraError as e:
-            raise ToolError(e.message) from e
-        except Exception as e:
-            raise ToolError(f"Failed to create Jira issues: {e}") from e
+                await ctx.info(f"Successfully created {len(created)} issues")
+                TOOL_CALLS.labels(
+                    tool_name="jira_create_issues_batch", status="success"
+                ).inc()
+                return JiraCreateIssuesBatchResponse(
+                    created=[JiraCreatedIssue(**issue) for issue in created]
+                )
+
+            except JiraError as e:
+                TOOL_CALLS.labels(
+                    tool_name="jira_create_issues_batch", status="error"
+                ).inc()
+                raise ToolError(e.message) from e
+            except Exception as e:
+                TOOL_CALLS.labels(
+                    tool_name="jira_create_issues_batch", status="error"
+                ).inc()
+                raise ToolError(f"Failed to create Jira issues: {e}") from e
 
     @mcp.tool(
         name="jira_update_issue",

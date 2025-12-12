@@ -80,6 +80,39 @@ Server starts at http://localhost:8001
 curl http://localhost:8001/.well-known/agent-card.json
 ```
 
+### Cloud.ru Hosting
+
+Agent supports unified environment variables for both local and Cloud.ru hosting:
+
+**Variable Mapping:**
+
+| Local Variable (Priority) | Cloud.ru Variable (Fallback) | Description |
+|---------------------------|------------------------------|-------------|
+| `OPENAI_API_KEY` | `LLM_API_KEY` | LLM API key |
+| `OPENAI_BASE_URL` | `LLM_API_BASE` | LLM API base URL |
+| `OPENAI_BASE_MODEL` | `LLM_MODEL` | Model name (cloud uses `hosted_vllm/` prefix) |
+| `MCP_SERVER_URL` | `MCP_URL` | MCP server URL (cloud supports comma-separated list, takes first) |
+| `A2A_SERVER_BASE_URL` | `URL_AGENT` | Agent public URL for Agent Card |
+| — | `AGENT_NAME` | Agent name (default: "PM Copilot Agent") |
+| — | `AGENT_DESCRIPTION` | Agent description (default: project description) |
+| — | `AGENT_VERSION` | Agent version (default: "v1.0.0") |
+
+**Priority:** Local variables (OPENAI_*, MCP_SERVER_URL, A2A_SERVER_BASE_URL) take precedence over Cloud.ru variables (LLM_*, MCP_URL, URL_AGENT) when both are present. This allows easier local development and debugging.
+
+**Configuration:** All mappings are handled automatically in `agent/core/config.py` using Pydantic `AliasChoices`. No code changes needed for deployment.
+
+**Example Cloud.ru Variables:**
+
+```bash
+LLM_API_KEY=sk-...
+LLM_API_BASE=https://foundation-models.api.cloud.ru/v1
+LLM_MODEL=hosted_vllm/Qwen/Qwen3-Coder-480B-A35B-Instruct
+MCP_URL=http://mcp-server:8000/mcp
+URL_AGENT=https://abc123-agent.ai-agent.inference.cloud.ru
+AGENT_NAME=PM Copilot
+AGENT_VERSION=v1.0.0
+```
+
 ## Architecture
 
 ### Service Layer Pattern
@@ -103,6 +136,22 @@ PM Layer uses **Google Calendar extendedProperties.private** + **Jira Labels** f
 - No external database required
 - Automatic cleanup when events are deleted
 - Size limit: ~8KB per event (validated before storage)
+
+#### Multi-Calendar Architecture
+
+Each Jira project has its own Google Calendar:
+
+- **Calendar naming**: Calendar name = project_key (e.g., "ALPHA", "BETA", "GAMMA")
+- **Metadata storage**: Calendar description contains metadata in key=value format:
+
+  ```text
+  jira_project_key=ALPHA
+  confluence_space_key=ALPHA
+  ```
+
+- **Auto-creation**: Calendars are automatically created when first accessed via `calendar_find_project_calendar`
+- **Project isolation**: Events for different projects are stored in separate calendars
+- **Service Account**: Uses Google Service Account authentication for programmatic access to all project calendars
 
 ### Agent Storage Architecture
 
@@ -196,3 +245,111 @@ async def test_tool_success(mcp_client: Client, mock_service: MockService):
 ## Configuration
 
 Environment variables loaded via pydantic-settings. Copy `.env.example` to `.env` and fill in credentials. Test env vars are set in `pyproject.toml` under `[tool.pytest.ini_options]`.
+
+### Google Calendar Service Account Setup
+
+The application uses Google Service Account authentication for Calendar API access:
+
+1. **Create Service Account** in Google Cloud Console:
+   - Go to [Google Cloud Console](https://console.cloud.google.com)
+   - Create a new project or select existing one
+   - Enable Google Calendar API
+   - Create a Service Account with Calendar access
+   - Generate and download JSON key file
+
+2. **Configure Environment Variables**:
+
+   ```bash
+   GOOGLE_SERVICE_ACCOUNT_EMAIL=your-service-account@project.iam.gserviceaccount.com
+   GOOGLE_SERVICE_ACCOUNT_KEY_JSON='{"type":"service_account","project_id":"...","private_key":"...","client_email":"..."}'
+   ```
+
+3. **Share Calendars** (optional):
+   - Service account automatically creates calendars for each project
+   - To access existing calendars, share them with the service account email
+   - Grant "Make changes to events" permission
+
+4. **Calendar Management**:
+   - Use `calendar_find_project_calendar` to find or create calendar for a project
+   - Calendar naming: calendar name matches Jira project_key (ALPHA, BETA, etc.)
+   - Metadata stored in calendar description for project mapping
+
+### Observability & Monitoring
+
+The MCP server includes built-in OpenTelemetry tracing and Prometheus metrics support for production observability.
+
+#### Configuration Strategy
+
+The server supports **two deployment modes** with automatic environment detection:
+
+1. **Phoenix Cloud** (managed) - Platform provides Phoenix-specific variables
+2. **Self-hosted / Local dev** - Uses standard OpenTelemetry variables
+
+All configuration is managed via `Settings` class in `pm_mcp/config.py`.
+
+#### Environment Variables
+
+**Phoenix Cloud (Production)** - Auto-provided by platform:
+
+- `PHOENIX_PROJECT_NAME` - Project identifier (used as service.name in telemetry)
+- `OTEL_ENDPOINT` - OTEL Telemetry collector endpoint (e.g., `http://otel-collector:4318`)
+- `ENABLE_PHOENIX` - Enable Phoenix telemetry (default: `true`)
+- `ENABLE_MONITORING` - Enable Prometheus metrics (default: `true`)
+
+**Self-hosted / Local Development** - Standard OpenTelemetry variables:
+
+- `LOG_LEVEL` - Logging level: DEBUG, INFO, WARNING, ERROR (default: `INFO`)
+- `OTEL_EXPORTER_OTLP_ENDPOINT` - OTLP endpoint (empty = console exporter)
+- `OTEL_SERVICE_NAME` - Service name for telemetry (default: `pm-mcp-server`)
+
+**Fallback Logic** (priority order):
+
+- **Service name**: `PHOENIX_PROJECT_NAME` → `OTEL_SERVICE_NAME` → `"pm-mcp-server"`
+- **OTLP endpoint**: `OTEL_ENDPOINT` → `OTEL_EXPORTER_OTLP_ENDPOINT` → console exporter
+
+#### Configuration Examples
+
+**Phoenix Cloud** (no setup needed):
+
+```bash
+# Variables auto-provided by platform
+PHOENIX_PROJECT_NAME=my-project
+OTEL_ENDPOINT=http://otel-collector:4318
+```
+
+**Self-hosted with Jaeger**:
+
+```bash
+OTEL_SERVICE_NAME=pm-mcp-server
+OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
+```
+
+**Local development** (traces to console):
+
+```bash
+# No variables needed - traces output to console
+uv run python -m pm_mcp
+```
+
+#### Metrics Collected
+
+**Tool Metrics**:
+
+- `tool_calls_total` - Counter of tool invocations (labels: `tool_name`, `status`)
+- `tool_duration_seconds` - Histogram of tool execution time (label: `tool_name`)
+
+**API Metrics**:
+
+- `api_calls_total` - Counter of external API calls (labels: `service`, `endpoint`, `status`)
+
+**Instrumented Tools**:
+
+- `jira_list_issues`, `jira_create_issues_batch`
+- `pm_link_meeting_issues`, `pm_get_meeting_issues`, `pm_get_project_snapshot`
+
+#### Behavior
+
+- **When ENABLE_PHOENIX=false**: Telemetry disabled completely
+- **When ENABLE_MONITORING=false**: Metrics use no-op implementation (zero overhead)
+- **When OTEL endpoint not set**: Traces are logged to console for local debugging
+- **Graceful degradation**: Telemetry errors don't affect MCP server functionality

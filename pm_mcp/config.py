@@ -1,7 +1,7 @@
 """Configuration management using pydantic-settings."""
 
 from functools import lru_cache
-from typing import Literal
+from typing import Any
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -28,42 +28,62 @@ class Settings(BaseSettings):
         description="Confluence Cloud base URL",
     )
 
-    # PostgreSQL
-    postgres_host: str = Field(default="localhost", description="PostgreSQL host")
-    postgres_port: int = Field(default=5432, description="PostgreSQL port")
-    postgres_db: str = Field(default="pm_mcp", description="PostgreSQL database name")
-    postgres_user: str = Field(default="pm_mcp", description="PostgreSQL user")
-    postgres_password: str = Field(default="", description="PostgreSQL password")
-
-    # Google Calendar
-    google_calendar_id: str = Field(default="", description="Google Calendar ID")
-    google_api_key: str = Field(default="", description="Google API key")
+    # Google Calendar - Service Account
+    google_service_account_email: str = Field(
+        default="", description="Service account email for Calendar API"
+    )
+    google_service_account_key_json: str = Field(
+        default="",
+        description="Service account JSON key (full JSON structure as string)",
+    )
+    calendar_owner_email: str = Field(
+        default="",
+        description="User email to share created calendars with (optional)",
+    )
 
     # Server settings
     server_host: str = Field(default="0.0.0.0", description="Server host")
     server_port: int = Field(default=8000, description="Server port")
 
-    # MCP Transport
-    mcp_transport: Literal["stdio", "http"] = Field(
-        default="http",
-        description="MCP transport mode: 'stdio' for CLI/desktop apps, 'http' for network deployment",
+    # Logging and Observability
+
+    # Production (container deployment) variables
+    phoenix_project_name: str = Field(
+        default="",
+        description="Phoenix project identifier (used as service.name in telemetry)",
+    )
+    otel_endpoint: str = Field(
+        default="", description="OTEL Telemetry collector endpoint (production)"
+    )
+    enable_phoenix: bool = Field(
+        default=False, description="Enable Phoenix telemetry (default: False)"
+    )
+    enable_monitoring: bool = Field(
+        default=False,
+        description="Enable Prometheus metrics collection (default: False)",
+    )
+
+    # Local development fallback variables
+    log_level: str = Field(
+        default="INFO", description="Logging level (DEBUG, INFO, WARNING, ERROR)"
+    )
+    otel_exporter_otlp_endpoint: str = Field(
+        default="",
+        description="OpenTelemetry OTLP exporter endpoint (local dev fallback)",
+    )
+    otel_service_name: str = Field(
+        default="pm-mcp-server",
+        description="Service name for telemetry (local dev fallback)",
     )
 
     @property
-    def database_url(self) -> str:
-        """Construct PostgreSQL connection URL."""
-        return (
-            f"postgresql://{self.postgres_user}:{self.postgres_password}"
-            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
-        )
+    def google_service_account_credentials(self) -> dict[str, Any]:
+        """Parse service account JSON credentials."""
+        import json
 
-    @property
-    def database_url_async(self) -> str:
-        """Construct asyncpg connection URL."""
-        return (
-            f"postgresql://{self.postgres_user}:{self.postgres_password}"
-            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
-        )
+        if not self.google_service_account_key_json:
+            return {}
+        return json.loads(self.google_service_account_key_json)
 
 
 @lru_cache(maxsize=1)

@@ -4,7 +4,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from a2a.server.request_handlers import DefaultRequestHandler
-from a2a.server.apps import A2AFastAPIApplication
+from a2a.server.apps import A2AStarletteApplication
 from a2a.server.tasks import InMemoryTaskStore
 from fastapi import FastAPI
 
@@ -21,13 +21,34 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Lifecycle manager for A2A server.
 
-    Handles initialization and cleanup of MCP client and checkpointer.
+    Handles cleanup of checkpointer on shutdown.
+    Dependencies are initialized in create_a2a_app() before handler creation.
 
     Args:
         app: FastAPI application
     """
+    logger.info("A2A server started")
+
+    yield
+
+    # Cleanup
+    logger.info("Shutting down A2A server...")
+    close_checkpointer(app.state.checkpointer)
+    logger.info("A2A server shutdown complete")
+
+
+def create_a2a_app() -> FastAPI:
+    """Create A2A FastAPI application.
+
+    Returns:
+        FastAPI application with A2A endpoints
+    """
     settings = AgentSettings()
-    logger.info("Initializing A2A server...")
+
+    logger.info("Creating A2A FastAPI application...")
+
+    # Initialize dependencies BEFORE creating handler
+    # (handler needs actual instances, not factories)
 
     # Initialize MCP client
     mcp_config = {
@@ -47,59 +68,39 @@ async def lifespan(app: FastAPI):
     task_store = InMemoryTaskStore()
     logger.info("In-memory task store initialized")
 
-    # Store in app state
+    # Create executor with initialized dependencies
+    executor = PMCopilotExecutor(
+        mcp_client=mcp_client,
+        checkpointer=checkpointer,
+        settings=settings,
+    )
+
+    # Create request handler with executor and task store
+    handler = DefaultRequestHandler(
+        agent_executor=executor,
+        task_store=task_store,
+    )
+
+    # Create A2A app with handler instance (using Starlette like cloud.ru example)
+    a2a_app = A2AStarletteApplication(
+        agent_card=get_agent_card(settings),
+        http_handler=handler,
+    )
+
+    # Build Starlette app
+    starlette_app = a2a_app.build()
+
+    # Wrap in FastAPI for lifespan support
+    app = FastAPI(lifespan=lifespan)
+    app.mount("/", starlette_app)
+
+    # Store dependencies in app state for cleanup in lifespan
     app.state.mcp_client = mcp_client
     app.state.checkpointer = checkpointer
     app.state.task_store = task_store
     app.state.settings = settings
 
-    logger.info("A2A server initialized successfully")
-
-    yield
-
-    # Cleanup
-    logger.info("Shutting down A2A server...")
-    close_checkpointer(checkpointer)
-    logger.info("A2A server shutdown complete")
-
-
-def create_a2a_app() -> FastAPI:
-    """Create A2A FastAPI application.
-
-    Returns:
-        FastAPI application with A2A endpoints
-    """
-    settings = AgentSettings()
-
-    logger.info("Creating A2A FastAPI application...")
-
-    # Create executor factory
-    def executor_factory(app: FastAPI) -> PMCopilotExecutor:
-        """Create PMCopilotExecutor with dependencies from app state."""
-        return PMCopilotExecutor(
-            mcp_client=app.state.mcp_client,
-            checkpointer=app.state.checkpointer,
-            settings=app.state.settings,
-        )
-
-    # Create request handler factory
-    def handler_factory(app: FastAPI) -> DefaultRequestHandler:
-        """Create DefaultRequestHandler with executor and task store."""
-        return DefaultRequestHandler(
-            agent_executor=executor_factory(app),
-            task_store=app.state.task_store,
-        )
-
-    # Create A2A app
-    a2a_app = A2AFastAPIApplication(
-        agent_card=get_agent_card(settings),
-        http_handler=handler_factory,
-    )
-
-    # Build FastAPI app with lifespan (standard FastAPI pattern)
-    app = a2a_app.build(lifespan=lifespan)
-
-    logger.info("A2A FastAPI application created")
+    logger.info("A2A FastAPI application created successfully")
 
     return app
 

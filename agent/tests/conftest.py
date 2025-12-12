@@ -16,9 +16,6 @@ def settings():
         openai_base_model="gpt-4o-mini",
         max_iterations=5,
         openai_api_key="test-api-key",
-        mcp_server_transport="stdio",
-        mcp_server_command="python",
-        mcp_server_args=["-m", "pm_mcp"],
     )
 
 

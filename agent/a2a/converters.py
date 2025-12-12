@@ -3,12 +3,40 @@
 import logging
 from typing import Any
 
+from a2a.utils.message import get_message_text
 from langchain_core.messages import AIMessage, HumanMessage
 
 from agent.core.config import AgentSettings
 from agent.core.state import ProjectContext
 
 logger = logging.getLogger(__name__)
+
+
+def extract_message_content(msg: Any) -> str:
+    """Extract text content from A2A message.
+
+    Uses official a2a-sdk utility function for proper message parsing.
+
+    Args:
+        msg: A2A Message object
+
+    Returns:
+        Message text content
+
+    Raises:
+        ValueError: If message format is invalid
+    """
+    try:
+        # Official way to extract text from A2A Message
+        return get_message_text(msg)
+    except Exception as e:
+        # Fallback for backwards compatibility or edge cases
+        if hasattr(msg, "content"):
+            logger.warning(f"Falling back to .content attribute: {e}")
+            return msg.content
+        raise ValueError(
+            f"Failed to extract content from message (type: {type(msg).__name__}): {e}"
+        ) from e
 
 
 def a2a_to_langchain_message(msg: Any) -> HumanMessage:
@@ -23,21 +51,7 @@ def a2a_to_langchain_message(msg: Any) -> HumanMessage:
     Raises:
         ValueError: If message format is invalid (no content or parts)
     """
-    if hasattr(msg, "content"):
-        content = msg.content
-    elif hasattr(msg, "parts") and msg.parts:
-        # Try to extract from parts (A2A message structure)
-        if msg.parts[0].root and hasattr(msg.parts[0].root, "text"):
-            content = msg.parts[0].root.text
-        else:
-            content = ""
-    else:
-        # Don't use str(msg) - it might expose internal state
-        raise ValueError(
-            f"Invalid A2A message format: missing 'content' or 'parts' "
-            f"(type: {type(msg).__name__})"
-        )
-
+    content = extract_message_content(msg)
     return HumanMessage(content=content)
 
 
@@ -62,36 +76,38 @@ def extract_project_context(
 ) -> ProjectContext:
     """Extract ProjectContext from A2A message metadata.
 
+    Agent will determine project_key from conversation context if not provided.
+
     WARNING: Do not log raw metadata - it may contain sensitive data.
 
     Args:
         msg: A2A Message object with optional metadata
-        settings: Agent settings for defaults
+        settings: Agent settings
 
     Returns:
-        ProjectContext with validated project metadata
+        ProjectContext with validated project metadata (project_key may be None)
     """
     metadata = {}
     if hasattr(msg, "metadata") and msg.metadata:
         metadata = msg.metadata
 
-    # Extract with validation
-    project_key = metadata.get("project_key", settings.default_project_key)
-    sprint_name = metadata.get("sprint_name", settings.default_sprint_name)
+    # Extract with validation (no defaults)
+    project_key = metadata.get("project_key")
+    sprint_name = metadata.get("sprint_name")
     team_members = metadata.get("team_members", [])
 
     # Validate types to prevent injection attacks
     if project_key and not isinstance(project_key, str):
         logger.warning(
-            f"Invalid project_key type: {type(project_key).__name__}, using default"
+            f"Invalid project_key type: {type(project_key).__name__}, ignoring"
         )
-        project_key = settings.default_project_key
+        project_key = None
 
     if sprint_name and not isinstance(sprint_name, str):
         logger.warning(
-            f"Invalid sprint_name type: {type(sprint_name).__name__}, using default"
+            f"Invalid sprint_name type: {type(sprint_name).__name__}, ignoring"
         )
-        sprint_name = settings.default_sprint_name
+        sprint_name = None
 
     if not isinstance(team_members, list):
         logger.warning(
@@ -100,7 +116,7 @@ def extract_project_context(
         team_members = []
 
     return ProjectContext(
-        project_key=project_key or "UNKNOWN",
+        project_key=project_key,
         sprint_name=sprint_name,
         team_members=team_members,
     )

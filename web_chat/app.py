@@ -5,9 +5,10 @@ import logging
 import uuid
 
 import chainlit as cl
-from a2a.client import ClientFactory, create_text_message_object
+import httpx
+from a2a.client import ClientFactory
 from a2a.client.client import Client, ClientConfig
-from a2a.types import Message, Task, TaskArtifactUpdateEvent, TaskStatusUpdateEvent
+from a2a.types import Message, Task, TaskArtifactUpdateEvent, TaskStatusUpdateEvent, TextPart, Part
 
 from web_chat.config import get_settings
 
@@ -57,9 +58,11 @@ async def on_chat_start():
     if a2a_client is None:
         await initialize_a2a_client()
 
-    # Генерация уникального session_id
+    # Генерация уникального session_id и context_id для A2A
     session_id = str(uuid.uuid4())
+    context_id = str(uuid.uuid4())  # Единый context_id для всей сессии
     cl.user_session.set("session_id", session_id)
+    cl.user_session.set("context_id", context_id)
 
     # Приветствие (без запроса project_key - агент сам поймет)
     await cl.Message(
@@ -87,70 +90,81 @@ async def on_message(message: cl.Message):
         msg = cl.Message(content="")
         await msg.send()
 
-        # Создаем текстовое сообщение для A2A
-        text_message = create_text_message_object(message.content)
+        # Получаем context_id из сессии для сохранения истории разговора
+        context_id = cl.user_session.get("context_id")
+
+        # Создаем текстовое сообщение для A2A (user message)
+        text_part = TextPart(text=message.content)
+        part = Part(root=text_part)
+        text_message = Message(
+            messageId=str(uuid.uuid4()),
+            contextId=context_id,  # Используем один context_id для всей сессии
+            role="user",
+            parts=[part]
+        )
 
         # Streaming через A2A protocol
         current_content = ""
         task_completed = False
 
         async for event in a2a_client.send_message(text_message):
-            # Обработка разных типов событий согласно документации A2A SDK
-            if isinstance(event, Message):
-                # Промежуточное сообщение от агента
-                logger.debug(f"Received Message event: {event.id}")
-                if event.content:
-                    for content_part in event.content:
-                        if hasattr(content_part, "text") and content_part.text:
-                            current_content += content_part.text
-                            await msg.stream_token(content_part.text)
+            # A2A SDK возвращает tuple: (Task, event_data)
+            if isinstance(event, tuple) and len(event) == 2:
+                task, event_data = event
+                logger.debug(f"Received: Task(state={task.status.state.value}), event={type(event_data).__name__ if event_data else 'None'}")
 
-            elif isinstance(event, Task):
-                # Финальный результат задачи
-                logger.info(f"Received Task event: id={event.id}, state={event.state}")
+                # Обрабатываем сообщения из истории Task
+                if task.history:
+                    for msg_item in task.history:
+                        if isinstance(msg_item, Message) and msg_item.role.value == "agent":
+                            # Извлекаем текст из последнего сообщения агента
+                            for part in msg_item.parts:
+                                if hasattr(part.root, "text"):
+                                    text = part.root.text
+                                    # Добавляем только новый контент
+                                    if text not in current_content:
+                                        current_content += text
+                                        await msg.stream_token(text)
 
-                # Обрабатываем output только если задача завершена
-                if event.state in ["COMPLETED", "FAILED", "CANCELLED"]:
+                # Проверяем статус задачи
+                task_state = task.status.state.value
+                logger.debug(f"Task state: {task_state}")
+
+                if task_state in ["completed", "failed", "cancelled"]:
                     task_completed = True
 
-                    if (
-                        event.state == "COMPLETED"
-                        and event.output
-                        and event.output.content
-                    ):
-                        for content_part in event.output.content:
-                            if hasattr(content_part, "text") and content_part.text:
-                                # Если это новый контент (не дублируется)
-                                new_text = content_part.text
-                                if new_text not in current_content:
-                                    current_content += new_text
-                                    await msg.stream_token(new_text)
-
-                    elif event.state == "FAILED":
+                    if task_state == "failed":
                         error_msg = "\n\nОшибка выполнения задачи."
-                        if event.output and hasattr(event.output, "error"):
-                            error_msg += f" {event.output.error}"
-                        current_content += error_msg
-                        await msg.stream_token(error_msg)
+                        if task.status.message:
+                            error_msg += f" {task.status.message}"
+                        if error_msg not in current_content:
+                            current_content += error_msg
+                            await msg.stream_token(error_msg)
 
-                    elif event.state == "CANCELLED":
+                    elif task_state == "cancelled":
                         cancel_msg = "\n\nЗадача была отменена."
-                        current_content += cancel_msg
-                        await msg.stream_token(cancel_msg)
+                        if cancel_msg not in current_content:
+                            current_content += cancel_msg
+                            await msg.stream_token(cancel_msg)
 
-            elif isinstance(event, TaskStatusUpdateEvent):
-                # Обновление статуса задачи
-                logger.debug(f"Task status update: {event.state}")
-                # Можно добавить индикацию прогресса в UI при необходимости
+                continue
 
-            elif isinstance(event, TaskArtifactUpdateEvent):
-                # Обновление артефактов задачи
-                logger.debug(f"Task artifact update: {event}")
-                # Можно обработать артефакты при необходимости
+            # Обработка старого формата (на случай если SDK изменится)
+            if isinstance(event, Message):
+                logger.debug(f"Received standalone Message event")
+                if event.role.value == "agent":
+                    for part in event.parts:
+                        if hasattr(part.root, "text") and part.root.text not in current_content:
+                            current_content += part.root.text
+                            await msg.stream_token(part.root.text)
+
+            elif isinstance(event, Task):
+                logger.debug(f"Received standalone Task event")
+                # Аналогичная обработка
+                pass
 
             else:
-                # Неизвестный тип события
-                logger.warning(f"Unknown event type: {type(event)}")
+                logger.warning(f"Unknown event format: {type(event)}")
 
         # Финализация сообщения
         if current_content.strip():

@@ -9,20 +9,17 @@ def get_agent_card(settings: AgentSettings) -> AgentCard:
     """Generate Agent Card for PM Copilot.
 
     Args:
-        settings: Agent settings with server URL
+        settings: Agent settings with agent metadata and server URL
 
     Returns:
         Agent Card object
     """
     return AgentCard(
-        name="PM Copilot Agent",
-        description=(
-            "AI-powered assistant for project managers. "
-            "Automates sprint planning, status reporting, meeting coordination, "
-            "and team workload management."
-        ),
+        name=settings.agent_name,
+        description=settings.agent_description,
         url=settings.a2a_server_base_url,
-        version="1.0.0",
+        version=settings.agent_version,
+        protocol_version="0.3.0",
         default_input_modes=["text/plain", "application/json"],
         default_output_modes=["text/plain", "application/json"],
         capabilities=AgentCapabilities(

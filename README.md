@@ -39,24 +39,36 @@ ATLASSIAN_EMAIL=your-email@example.com
 JIRA_BASE_URL=https://your-domain.atlassian.net
 CONFLUENCE_BASE_URL=https://your-domain.atlassian.net/wiki
 
-# Google Calendar
-GOOGLE_CALENDAR_ID=your-calendar-id
-GOOGLE_API_KEY=your-api-key
+# Google Calendar (Service Account)
+GOOGLE_SERVICE_ACCOUNT_EMAIL=your-sa@project.iam.gserviceaccount.com
+GOOGLE_SERVICE_ACCOUNT_KEY_JSON='{"type":"service_account","project_id":"...","private_key":"...","client_email":"..."}'
 ```
 
 ### Получение токенов
 
 - **Atlassian API Token**: [Создать токен](https://id.atlassian.com/manage-profile/security/api-tokens)
-- **Google API Key**: [Google Cloud Console](https://console.cloud.google.com/apis/credentials) — включите Calendar API
+- **Google Service Account**:
+  1. Перейдите в [Google Cloud Console](https://console.cloud.google.com)
+  2. Создайте проект или выберите существующий
+  3. Включите Google Calendar API
+  4. Создайте Service Account с доступом к Calendar
+  5. Сгенерируйте и скачайте JSON ключ
+  6. Скопируйте содержимое JSON файла в переменную `GOOGLE_SERVICE_ACCOUNT_KEY_JSON`
+
+### Мультикалендарная архитектура
+
+Система автоматически создает отдельный календарь для каждого проекта Jira:
+
+- **Именование календарей**: имя календаря = project_key (например, "ALPHA", "BETA")
+- **Автосоздание**: календари создаются при первом обращении
+- **Изоляция данных**: события разных проектов хранятся в отдельных календарях
+- **Метаданные**: связка с проектом сохраняется в описании календаря
 
 ## Запуск
 
 ### Локально
 
 ```bash
-# Запуск миграций БД
-uv run alembic upgrade head
-
 # Запуск сервера
 uv run python -m pm_mcp
 ```
@@ -66,7 +78,7 @@ uv run python -m pm_mcp
 ### Docker
 
 ```bash
-# Запуск всего стека (PostgreSQL + миграции + сервер)
+# Запуск всего стека (mcp-server + agent-a2a)
 docker compose up -d
 
 # Просмотр логов
@@ -161,7 +173,9 @@ curl http://localhost:8001/.well-known/agent-card.json
 
 | Инструмент | Описание |
 |------------|----------|
-| `calendar_list_events` | Список событий за период |
+| `calendar_list_events` | Список событий за период (по project_key или calendar_id) |
+| `calendar_list_calendars` | Список всех доступных календарей с метаданными |
+| `calendar_find_project_calendar` | Найти или создать календарь для проекта |
 
 ### PM Layer
 

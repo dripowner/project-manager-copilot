@@ -7,6 +7,7 @@ from functools import wraps
 from typing import Any, Callable, ParamSpec, TypeVar
 
 from pm_mcp.config import Settings, get_settings
+from pm_mcp.core.metrics import API_CALLS
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +47,29 @@ class BaseService(ABC):
         self.settings = settings or get_settings()
         self.logger = logging.getLogger(self.__class__.__name__)
 
-    def _log_error(self, operation: str, error: Exception) -> None:
+    def _log_error(
+        self, operation: str, error: Exception, extra_context: dict[str, Any] | None = None
+    ) -> None:
         """Log error with context."""
-        self.logger.error(f"{operation} failed: {error}")
+        if extra_context:
+            self.logger.error(
+                f"{operation} failed: {error}",
+                extra={"context": extra_context},
+            )
+        else:
+            self.logger.error(f"{operation} failed: {error}")
 
     def _log_info(self, message: str, **kwargs: Any) -> None:
         """Log info with context."""
         extra = " ".join(f"{k}={v}" for k, v in kwargs.items())
         self.logger.info(f"{message} {extra}".strip())
+
+    def _track_api_call(self, endpoint: str, status: str = "success") -> None:
+        """Track API call metric.
+
+        Args:
+            endpoint: API endpoint called (e.g., "search", "issues")
+            status: Call status (success | error)
+        """
+        service_name = self.__class__.__name__.replace("Service", "").lower()
+        API_CALLS.labels(service=service_name, endpoint=endpoint, status=status).inc()

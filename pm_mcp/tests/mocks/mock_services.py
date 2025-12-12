@@ -2,16 +2,23 @@
 
 import json
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 
 class MockCalendarService:
     """Mock Google Calendar service with extendedProperties support."""
 
     def __init__(self) -> None:
-        self.list_events = AsyncMock(return_value=self._default_events())
+        self.list_events = AsyncMock(side_effect=self._list_events)
         self.update_event_metadata = AsyncMock(side_effect=self._update_event_metadata)
         self.get_event_metadata = AsyncMock(side_effect=self._get_event_metadata)
+        self.list_calendars = AsyncMock(side_effect=self._list_calendars)
+        self.find_or_create_project_calendar = AsyncMock(
+            side_effect=self._find_or_create_project_calendar
+        )
+        self.create_project_calendar = AsyncMock(
+            side_effect=self._create_project_calendar
+        )
 
         # In-memory storage: event_id -> extendedProperties.private
         self._events_metadata: dict[str, dict[str, Any]] = {}
@@ -29,6 +36,27 @@ class MockCalendarService:
                 "start": {"dateTime": "2024-01-16T14:00:00+00:00"},
             },
         }
+
+        # Mock calendars storage: calendar_id -> calendar data
+        self._calendars: dict[str, dict[str, Any]] = {
+            "calendar_alpha": {
+                "calendar_id": "calendar_alpha",
+                "name": "ALPHA",
+                "description": "jira_project_key=ALPHA\nconfluence_space_key=ALPHA",
+                "primary": False,
+                "jira_project_key": "ALPHA",
+                "confluence_space_key": "ALPHA",
+            },
+            "calendar_beta": {
+                "calendar_id": "calendar_beta",
+                "name": "BETA",
+                "description": "jira_project_key=BETA",
+                "primary": False,
+                "jira_project_key": "BETA",
+                "confluence_space_key": None,
+            },
+        }
+        self._calendar_counter = 0
 
     def _default_events(self) -> list[dict[str, Any]]:
         return [
@@ -60,8 +88,20 @@ class MockCalendarService:
             "start": {"dateTime": start_datetime},
         }
 
+    async def _list_events(
+        self,
+        calendar_id: str,
+        time_min: Any = None,
+        time_max: Any = None,
+        text_query: str | None = None,
+        max_results: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Mock list events with calendar_id parameter."""
+        return self._default_events()
+
     async def _update_event_metadata(
         self,
+        calendar_id: str,
         event_id: str,
         jira_issues: list[str],
         confluence_page_id: str | None = None,
@@ -80,7 +120,9 @@ class MockCalendarService:
 
         return {"id": event_id, "extendedProperties": {"private": metadata}}
 
-    async def _get_event_metadata(self, event_id: str) -> dict[str, Any]:
+    async def _get_event_metadata(
+        self, calendar_id: str, event_id: str
+    ) -> dict[str, Any]:
         """Mock get event metadata."""
         private_props = self._events_metadata.get(event_id, {})
         event_data = self._events.get(event_id, {})
@@ -93,6 +135,52 @@ class MockCalendarService:
             "meeting_title": event_data.get("summary"),
             "meeting_date": event_data.get("start", {}).get("dateTime"),
         }
+
+    async def _list_calendars(self) -> list[dict[str, Any]]:
+        """Mock list all calendars."""
+        return list(self._calendars.values())
+
+    async def _create_project_calendar(
+        self,
+        project_key: str,
+        confluence_space_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Mock create calendar for project."""
+        self._calendar_counter += 1
+        calendar_id = f"calendar_{project_key.lower()}_{self._calendar_counter}"
+
+        description_lines = [f"jira_project_key={project_key}"]
+        if confluence_space_key:
+            description_lines.append(f"confluence_space_key={confluence_space_key}")
+        description = "\n".join(description_lines)
+
+        calendar = {
+            "calendar_id": calendar_id,
+            "name": project_key,
+            "description": description,
+            "primary": False,
+            "jira_project_key": project_key,
+            "confluence_space_key": confluence_space_key,
+            "created": True,
+        }
+
+        self._calendars[calendar_id] = calendar
+        return calendar
+
+    async def _find_or_create_project_calendar(
+        self,
+        project_key: str,
+        confluence_space_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Mock find or create calendar for project."""
+        # Search by name
+        for calendar in self._calendars.values():
+            if calendar["name"] == project_key:
+                calendar["created"] = False
+                return calendar
+
+        # Not found -> create
+        return await self._create_project_calendar(project_key, confluence_space_key)
 
 
 class MockJiraService:
@@ -244,5 +332,3 @@ Decisions:
             "title": "New Meeting Notes",
             "url": "https://confluence.example.com/pages/viewpage.action?pageId=789012",
         }
-
-

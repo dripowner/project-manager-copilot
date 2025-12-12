@@ -36,6 +36,18 @@ mcp-server = [
     "google-api-python-client>=2.187.0",
     "google-auth>=2.43.0",
     "lxml>=6.0.2",
+    "opentelemetry-api>=1.39.1",
+    "opentelemetry-exporter-otlp-proto-http>=1.39.1",
+    "opentelemetry-sdk>=1.39.1",
+    "prometheus-client>=0.23.1",
+    "pydantic-settings>=2.12.0",
+    "uvicorn>=0.38.0",
+]
+web-chat = [
+    "a2a-sdk>=0.3.20",
+    "chainlit>=2.9.3",
+    "httpx>=0.28.1",
+    "pydantic>=2.12.5",
     "pydantic-settings>=2.12.0",
     "uvicorn>=0.38.0",
 ]
@@ -49,6 +61,6 @@ env = [
     "ATLASSIAN_EMAIL=test@example.com",
     "JIRA_BASE_URL=https://test.atlassian.net",
     "CONFLUENCE_BASE_URL=https://test.atlassian.net/wiki",
-    "GOOGLE_CALENDAR_ID=test-calendar-id",
-    "GOOGLE_API_KEY=test-api-key",
+    "GOOGLE_SERVICE_ACCOUNT_EMAIL=test-sa@test.iam.gserviceaccount.com",
+    "GOOGLE_SERVICE_ACCOUNT_KEY_JSON={{\"type\":\"service_account\",\"project_id\":\"test\",\"private_key\":\"test-key\",\"client_email\":\"test@test.iam.gserviceaccount.com\"}}",
 ]

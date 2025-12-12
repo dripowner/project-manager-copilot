@@ -25,6 +25,7 @@ async def test_pm_link_meeting_issues(
     result = await mcp_client.call_tool(
         "pm_link_meeting_issues",
         {
+            "project_key": "ALPHA",
             "calendar_event_id": "event123",
             "jira_issue_keys": ["PROJ-1", "PROJ-2"],
             "confluence_page_id": "page456",
@@ -35,7 +36,9 @@ async def test_pm_link_meeting_issues(
     assert result is not None
 
     # Verify metadata was stored
-    metadata = await mock_calendar_service.get_event_metadata("event123")
+    metadata = await mock_calendar_service.get_event_metadata(
+        "calendar_alpha", "event123"
+    )
     assert metadata["issue_keys"] == ["PROJ-1", "PROJ-2"]
     assert metadata["confluence_page_id"] == "page456"
 
@@ -56,6 +59,7 @@ async def test_pm_link_meeting_issues_minimal(
     result = await mcp_client.call_tool(
         "pm_link_meeting_issues",
         {
+            "project_key": "ALPHA",
             "calendar_event_id": "event789",
             "jira_issue_keys": ["PROJ-3"],
         },
@@ -64,7 +68,9 @@ async def test_pm_link_meeting_issues_minimal(
     assert result is not None
 
     # Verify metadata was stored
-    metadata = await mock_calendar_service.get_event_metadata("event789")
+    metadata = await mock_calendar_service.get_event_metadata(
+        "calendar_alpha", "event789"
+    )
     assert metadata["issue_keys"] == ["PROJ-3"]
 
 
@@ -82,6 +88,7 @@ async def test_pm_get_meeting_issues(
         start_datetime="2024-01-15T10:00:00Z",
     )
     await mock_calendar_service.update_event_metadata(
+        calendar_id="calendar_alpha",
         event_id="event123",
         jira_issues=["PROJ-1", "PROJ-2"],
         confluence_page_id="page456",
@@ -90,7 +97,7 @@ async def test_pm_get_meeting_issues(
 
     result = await mcp_client.call_tool(
         "pm_get_meeting_issues",
-        {"calendar_event_id": "event123"},
+        {"project_key": "ALPHA", "calendar_event_id": "event123"},
     )
 
     assert result is not None
@@ -103,7 +110,7 @@ async def test_pm_get_meeting_issues_not_found(
     """Test getting issues for non-existent meeting."""
     result = await mcp_client.call_tool(
         "pm_get_meeting_issues",
-        {"calendar_event_id": "nonexistent"},
+        {"project_key": "ALPHA", "calendar_event_id": "nonexistent"},
     )
 
     assert result is not None

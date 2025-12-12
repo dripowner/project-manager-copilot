@@ -206,10 +206,26 @@ class JiraService(BaseService):
                 "url": f"{self.settings.jira_base_url}/browse/{result.get('key', '')}",
             }
         except HTTPError as e:
-            self._log_error("create_issue", e)
+            # Log detailed error information from Jira API
+            error_details = {
+                "operation": "create_issue",
+                "project_key": project_key,
+                "issue_type": issue_type,
+                "fields": fields,
+            }
+
+            # Try to extract response body
+            if hasattr(e, "response") and e.response is not None:
+                try:
+                    error_details["response_status"] = e.response.status_code
+                    error_details["response_body"] = e.response.text
+                except Exception:
+                    pass
+
+            self._log_error("create_issue", e, extra_context=error_details)
             raise JiraError(
-                message="Failed to create issue. Check project key and permissions.",
-                details={"operation": "create_issue", "project_key": project_key},
+                message=f"Failed to create issue. Jira API error: {str(e)}",
+                details=error_details,
             ) from e
         except Exception as e:
             self._log_error("create_issue", e)
@@ -434,7 +450,7 @@ class JiraService(BaseService):
         except HTTPError as e:
             self._log_error("add_meeting_label", e)
             raise JiraError(
-                message=f"Failed to add meeting label. Check issue key and permissions.",
+                message="Failed to add meeting label. Check issue key and permissions.",
                 details={"operation": "add_meeting_label", "issue_key": issue_key},
             ) from e
         except Exception as e:
@@ -480,7 +496,7 @@ class JiraService(BaseService):
         except HTTPError as e:
             self._log_error("remove_meeting_label", e)
             raise JiraError(
-                message=f"Failed to remove meeting label. Check issue key and permissions.",
+                message="Failed to remove meeting label. Check issue key and permissions.",
                 details={"operation": "remove_meeting_label", "issue_key": issue_key},
             ) from e
         except Exception as e:

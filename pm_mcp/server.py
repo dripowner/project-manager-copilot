@@ -10,6 +10,7 @@ from starlette.routing import Mount
 
 from pm_mcp.config import get_settings
 from pm_mcp.constants import SERVER_INSTRUCTIONS
+from pm_mcp.core.telemetry import init_telemetry
 from pm_mcp.services.calendar_service import CalendarService
 from pm_mcp.services.confluence_service import ConfluenceService
 from pm_mcp.services.jira_service import JiraService
@@ -26,7 +27,7 @@ def create_mcp_server() -> FastMCP:
     """Create and configure MCP server with all tools registered.
 
     Returns:
-        FastMCP: Server instance ready for HTTP or STDIO transport.
+        FastMCP: Server instance ready for HTTP transport.
     """
     mcp = FastMCP(name="pm-mcp", instructions=SERVER_INSTRUCTIONS)
 
@@ -57,10 +58,22 @@ def create_http_app():
     @asynccontextmanager
     async def app_lifespan(app: Any) -> AsyncGenerator[None, None]:
         """Initialize services on startup, cleanup on shutdown."""
+
+        # Load settings
+        settings = get_settings()
+
+        # Setup logging level from settings
+        logging.basicConfig(
+            level=getattr(logging, settings.log_level, logging.INFO),
+            format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        )
+
+        # Initialize OpenTelemetry with settings
+        init_telemetry(settings)
+
         logger.info("Starting PM MCP Server (HTTP transport)...")
 
         # Initialize all services
-        settings = get_settings()
         mcp.jira_service = JiraService(settings)
         mcp.confluence_service = ConfluenceService(settings)
         mcp.calendar_service = CalendarService(settings)
@@ -84,27 +97,3 @@ def create_http_app():
         lifespan=combined_lifespan,
         routes=[Mount("/", app=mcp_app)],
     )
-
-
-def run_stdio_server() -> None:
-    """Run MCP server in STDIO mode for local/desktop use.
-
-    Initializes all services and blocks until stdin closes.
-    """
-    logger.info("Starting PM MCP Server (STDIO transport)...")
-
-    # Create reusable MCP server
-    mcp = create_mcp_server()
-
-    # Initialize all services
-    settings = get_settings()
-    mcp.jira_service = JiraService(settings)
-    mcp.confluence_service = ConfluenceService(settings)
-    mcp.calendar_service = CalendarService(settings)
-    mcp.pm_service = PmService(settings)
-    logger.info("All services initialized (Jira, Confluence, Calendar, PM)")
-
-    logger.info("MCP server ready, waiting for requests...")
-
-    # Run in STDIO mode (blocks until stdin closes)
-    mcp.run()
