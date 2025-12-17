@@ -332,13 +332,20 @@ class CalendarService(BaseService):
                     user_acl = acl_entry
                     break
 
+            # Issue #12: Only expose service account email in DEBUG mode
+            service_account_email = (
+                self.settings.google_service_account_email
+                if self.settings.log_level == "DEBUG"
+                else None
+            )
+
             return {
                 "calendar": calendar,
                 "has_access": user_acl is not None,
                 "role": user_acl.get("role") if user_acl else None,
                 "user_email": user_email,
                 "acl_entries_count": len(acl_items),
-                "service_account_email": self.settings.google_service_account_email,
+                "service_account_email": service_account_email,
             }
 
         except HttpError as e:
@@ -580,8 +587,10 @@ class CalendarService(BaseService):
             ) from e
         except Exception as e:
             self._log_error("list_events", e)
+            # Issue #13: Mask exception details in production
             raise CalendarError(
-                message=f"Failed to list calendar events: {e}",
+                message="Failed to list calendar events",
+                details={"error_type": type(e).__name__},
             ) from e
 
     async def list_events(
@@ -653,9 +662,10 @@ class CalendarService(BaseService):
             ) from e
         except Exception as e:
             self._log_error("update_event_metadata", e)
+            # Issue #13: Mask exception details in production
             raise CalendarError(
-                message=f"Failed to update event metadata: {e}",
-                details={"event_id": event_id},
+                message="Failed to update event metadata",
+                details={"error_type": type(e).__name__, "event_id": event_id},
             ) from e
 
     async def update_event_metadata(
@@ -727,9 +737,10 @@ class CalendarService(BaseService):
             ) from e
         except Exception as e:
             self._log_error("get_event_metadata", e)
+            # Issue #13: Mask exception details in production
             raise CalendarError(
-                message=f"Failed to get event metadata: {e}",
-                details={"event_id": event_id},
+                message="Failed to get event metadata",
+                details={"error_type": type(e).__name__, "event_id": event_id},
             ) from e
 
     async def get_event_metadata(
