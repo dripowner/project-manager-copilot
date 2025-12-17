@@ -18,16 +18,28 @@ T = TypeVar("T")
 def escape_query_value(value: str) -> str:
     """Escape special characters for JQL/CQL queries.
 
-    Prevents injection attacks by escaping backslashes, double quotes,
-    and single quotes in user-provided values.
+    Uses Atlassian's recommended approach: wrap in quotes and escape internal quotes.
+    This handles all special characters: + - && || ! ( ) { } [ ] ^ " ~ * ? : \
+
+    Args:
+        value: User-provided value to escape
+
+    Returns:
+        Escaped value safe for JQL/CQL, wrapped in quotes
+
+    References:
+        https://support.atlassian.com/jira-service-management-cloud/docs/use-advanced-search-with-jira-query-language-jql/
     """
     if not value:
         return value
-    special_chars = ["\\", '"', "'"]
-    result = value
-    for char in special_chars:
-        result = result.replace(char, f"\\{char}")
-    return result
+
+    # Escape backslashes first (order matters)
+    escaped = value.replace("\\", "\\\\")
+    # Escape quotes
+    escaped = escaped.replace('"', '\\"')
+
+    # Wrap in quotes to handle all special chars
+    return f'"{escaped}"'
 
 
 def run_in_thread(func: Callable[P, T]) -> Callable[P, T]:
@@ -48,7 +60,10 @@ class BaseService(ABC):
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def _log_error(
-        self, operation: str, error: Exception, extra_context: dict[str, Any] | None = None
+        self,
+        operation: str,
+        error: Exception,
+        extra_context: dict[str, Any] | None = None,
     ) -> None:
         """Log error with context."""
         if extra_context:
