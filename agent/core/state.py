@@ -55,7 +55,8 @@ class ProjectContext(BaseModel):
     """Context about the current project being managed."""
 
     project_key: str | None = Field(
-        default=None, description="Jira project key (e.g., 'PROJ'). Agent determines from context if not provided."
+        default=None,
+        description="Jira project key (e.g., 'PROJ'). Agent determines from context if not provided.",
     )
     sprint_name: str | None = Field(default=None, description="Current sprint name")
     team_members: list[str] = Field(

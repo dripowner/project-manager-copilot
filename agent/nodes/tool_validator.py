@@ -55,8 +55,7 @@ async def tool_validator(
         )
 
         prompt = TOOL_PREDICTION_PROMPT.format(
-            tool_names=", ".join(available_tools),
-            request=last_message
+            tool_names=", ".join(available_tools), request=last_message
         )
 
         response = await llm.ainvoke([HumanMessage(content=prompt)])
@@ -69,20 +68,22 @@ async def tool_validator(
             predicted_tools = set()
         else:
             predicted_tools = {
-                tool.strip()
-                for tool in predicted_tools_str.split(",")
-                if tool.strip()
+                tool.strip() for tool in predicted_tools_str.split(",") if tool.strip()
             }
 
         # Check if any predicted tool requires project_key
         needs_project = bool(predicted_tools & TOOLS_REQUIRING_PROJECT)
 
-        logger.info(f"Tools requiring project: {predicted_tools & TOOLS_REQUIRING_PROJECT}")
+        logger.info(
+            f"Tools requiring project: {predicted_tools & TOOLS_REQUIRING_PROJECT}"
+        )
         logger.info(f"Current project_key: {project_key}")
 
         if needs_project and not project_key:
             # Missing required project_key
-            logger.warning("Project key required but missing, routing to ask_project_key")
+            logger.warning(
+                "Project key required but missing, routing to ask_project_key"
+            )
             return Command(goto="ask_project_key")
 
         # All prerequisites met, proceed to execution

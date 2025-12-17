@@ -3,7 +3,7 @@
 import logging
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.graph import StateGraph, START
+from langgraph.graph import START, StateGraph
 
 from agent.core.config import AgentSettings
 from agent.core.mcp_client import MCPClientWrapper

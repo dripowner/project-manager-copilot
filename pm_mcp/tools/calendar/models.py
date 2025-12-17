@@ -85,3 +85,57 @@ class CalendarFindResponse(BaseMcpModel):
     created: bool = Field(
         description="True if calendar was created, False if found existing"
     )
+
+
+class AccessInfo(BaseMcpModel):
+    """Access information for calendar verification."""
+
+    has_access: bool = Field(description="Whether the user has access to the calendar")
+    role: str | None = Field(
+        default=None,
+        description="User's role in calendar ACL (owner/writer/reader/freeBusyReader). "
+        "None if user has no access.",
+    )
+    user_email: str = Field(description="Email address that was checked for access")
+    acl_entries_count: int = Field(
+        description="Total number of ACL entries for this calendar. "
+        "Low count may indicate calendar not properly shared."
+    )
+    service_account_email: str | None = Field(
+        default=None,
+        description="Service account email used for API access (for troubleshooting)",
+    )
+
+
+class CalendarAccessVerificationResponse(BaseMcpModel):
+    """Response model for calendar_verify_project_access tool."""
+
+    calendar: CalendarInfo = Field(description="Information about the project calendar")
+    access: AccessInfo = Field(description="Detailed access information for the user")
+    message: str = Field(description="Human-readable summary of verification result")
+
+
+class GrantedAccessInfo(BaseMcpModel):
+    """Information about granted calendar access."""
+
+    user_email: str = Field(description="Email address that was granted access")
+    role: str = Field(
+        description="Role granted to the user (owner/writer/reader/freeBusyReader)"
+    )
+    action_taken: str = Field(
+        description="Action performed: 'granted' (new access), 'updated' (role changed), or 'already_exists' (no change)"
+    )
+    previous_role: str | None = Field(
+        default=None,
+        description="Previous role if access was updated. None for new grants.",
+    )
+
+
+class CalendarGrantAccessResponse(BaseMcpModel):
+    """Response model for calendar_grant_access tool."""
+
+    calendar: CalendarInfo = Field(description="Information about the project calendar")
+    access: GrantedAccessInfo = Field(description="Details about the granted access")
+    message: str = Field(
+        description="Human-readable summary of the grant operation result"
+    )

@@ -31,10 +31,7 @@ async def task_router(state: AgentState, settings: AgentSettings) -> Command:
 
     if not messages:
         logger.warning("No messages in state, defaulting to simple mode")
-        return Command(
-            update={"mode": "simple"},
-            goto="tool_validator"
-        )
+        return Command(update={"mode": "simple"}, goto="tool_validator")
 
     # Get the last user message
     last_message = messages[-1]
@@ -66,10 +63,7 @@ async def task_router(state: AgentState, settings: AgentSettings) -> Command:
 
         logger.info(f"Task classification: {mode}")
 
-        return Command(
-            update={"mode": mode},
-            goto="tool_validator"
-        )
+        return Command(update={"mode": mode}, goto="tool_validator")
 
     except Exception as e:
         logger.error(
@@ -80,7 +74,4 @@ async def task_router(state: AgentState, settings: AgentSettings) -> Command:
                 "base_url": settings.openai_base_url,
             },
         )
-        return Command(
-            update={"mode": "simple"},
-            goto="tool_validator"
-        )
+        return Command(update={"mode": "simple"}, goto="tool_validator")

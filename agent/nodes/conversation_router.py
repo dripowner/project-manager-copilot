@@ -31,10 +31,16 @@ async def conversation_router(state: AgentState, settings: AgentSettings) -> Com
 
     # Get last 5 messages for context (excluding current message)
     recent_messages = messages[-6:-1] if len(messages) > 1 else []
-    history = "\n".join(
-        [f"{'User' if hasattr(msg, 'type') and msg.type == 'human' else 'Assistant'}: {msg.content}"
-         for msg in recent_messages]
-    ) if recent_messages else "(No previous context)"
+    history = (
+        "\n".join(
+            [
+                f"{'User' if hasattr(msg, 'type') and msg.type == 'human' else 'Assistant'}: {msg.content}"
+                for msg in recent_messages
+            ]
+        )
+        if recent_messages
+        else "(No previous context)"
+    )
 
     logger.info(f"Classifying conversation: '{last_message[:50]}...'")
 
@@ -48,8 +54,7 @@ async def conversation_router(state: AgentState, settings: AgentSettings) -> Com
         )
 
         prompt = CONVERSATION_CLASSIFICATION_PROMPT.format(
-            history=history,
-            message=last_message
+            history=history, message=last_message
         )
         response = await llm.ainvoke([HumanMessage(content=prompt)])
 

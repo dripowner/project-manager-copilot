@@ -6,7 +6,7 @@ from typing import Any
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
-from a2a.types import TaskState
+from a2a.types import TaskState, TaskStatus, TaskStatusUpdateEvent
 from a2a.utils.message import new_agent_text_message
 from a2a.utils.task import new_task
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -17,6 +17,7 @@ from agent.a2a.converters import (
 )
 from agent.core.config import AgentSettings
 from agent.core.mcp_client import MCPClientWrapper
+from agent.core.messages import NodeMessages, ToolDisplayNames
 from agent.core.runner import run_agent_streaming
 
 logger = logging.getLogger(__name__)
@@ -95,31 +96,64 @@ class PMCopilotExecutor(AgentExecutor):
                 checkpointer=self.checkpointer,
                 thread_id=context.context_id,
             ):
-                # Track final output from agent
-                if event.get("event") == "on_chain_end":
-                    logger.info("Received on_chain_end event")
-                    output = event.get("data", {}).get("output", {})
+                # Defensive: Check event structure
+                if not isinstance(event, dict):
+                    logger.warning(f"Unexpected event type: {type(event)}, skipping")
+                    continue
 
-                    if isinstance(output, dict) and "messages" in output:
+                # Track final output from agent
+                event_type = event.get("event")
+                if not event_type:
+                    logger.debug("Event without 'event' key, skipping")
+                    continue
+
+                if event_type == "on_chain_end":
+                    logger.info("Received on_chain_end event")
+
+                    # Defensive: Check data structure
+                    data = event.get("data")
+                    if not isinstance(data, dict):
+                        logger.warning(
+                            f"Data is not dict: {type(data)}, skipping final content extraction"
+                        )
+                        continue
+
+                    output = data.get("output")
+                    if not isinstance(output, dict):
+                        logger.warning(
+                            f"Output is not dict: {type(output)}, skipping final content extraction"
+                        )
+                        continue
+
+                    # Defensive: Check messages structure
+                    if "messages" in output:
                         messages = output.get("messages", [])
+                        if not isinstance(messages, list):
+                            logger.warning(
+                                f"Messages is not list: {type(messages)}, skipping"
+                            )
+                            continue
+
                         logger.info(f"Found {len(messages)} messages in output")
                         if messages and hasattr(messages[-1], "content"):
                             final_content = messages[-1].content
-                            logger.info(f"Captured final content: {len(final_content)} chars")
+                            logger.info(
+                                f"Captured final content: {len(final_content)} chars"
+                            )
                     else:
-                        logger.info(f"Output type: {type(output)}, has messages key: {'messages' in output if isinstance(output, dict) else False}")
+                        logger.debug("Output has no 'messages' key")
 
                 # 3. Filter and convert LangGraph events (pass updater for heartbeats)
                 await self._handle_event(event, updater, context)
 
             # 4. Send final message (task and updater already created at start)
             if final_content:
-                logger.info(f"Sending final completed status ({len(final_content)} chars)")
+                logger.info(
+                    f"Sending final completed status ({len(final_content)} chars)"
+                )
                 await updater.update_status(
                     TaskState.completed,
-                    new_agent_text_message(
-                        final_content, task.context_id, task.id
-                    ),
+                    new_agent_text_message(final_content, task.context_id, task.id),
                 )
                 logger.info("Final message sent successfully")
             else:
@@ -158,7 +192,34 @@ class PMCopilotExecutor(AgentExecutor):
         """
         event_type = event.get("event")
         event_name = event.get("name", "")
-        event_tags = event.get("tags", [])
+
+        # Mapping node names to user-friendly messages (from constants)
+        node_messages = {
+            "conversation_router": NodeMessages.CONVERSATION_ROUTER,
+            "project_detector": NodeMessages.PROJECT_DETECTOR,
+            "task_router": NodeMessages.TASK_ROUTER,
+            "tool_validator": NodeMessages.TOOL_VALIDATOR,
+            "simple_executor": NodeMessages.SIMPLE_EXECUTOR,
+            "plan_executor": NodeMessages.PLAN_EXECUTOR,
+            "ask_project_key": NodeMessages.ASK_PROJECT_KEY,
+            "simple_chat_response": NodeMessages.SIMPLE_CHAT_RESPONSE,
+        }
+
+        # Mapping tool names to user-friendly display names (from constants)
+        tool_display_names = {
+            "jira_list_issues": ToolDisplayNames.JIRA_LIST_ISSUES,
+            "jira_create_issues_batch": ToolDisplayNames.JIRA_CREATE_ISSUES,
+            "jira_get_issue": ToolDisplayNames.JIRA_GET_ISSUE,
+            "jira_update_issue": ToolDisplayNames.JIRA_UPDATE_ISSUE,
+            "jira_add_comment": ToolDisplayNames.JIRA_ADD_COMMENT,
+            "calendar_list_meetings": ToolDisplayNames.CALENDAR_LIST_MEETINGS,
+            "calendar_create_meeting": ToolDisplayNames.CALENDAR_CREATE_MEETING,
+            "pm_link_meeting_issues": ToolDisplayNames.PM_LINK_MEETING_ISSUES,
+            "pm_get_meeting_issues": ToolDisplayNames.PM_GET_MEETING_ISSUES,
+            "pm_get_project_snapshot": ToolDisplayNames.PM_GET_PROJECT_SNAPSHOT,
+            "confluence_search_pages": ToolDisplayNames.CONFLUENCE_SEARCH,
+            "confluence_read_page": ToolDisplayNames.CONFLUENCE_READ,
+        }
 
         try:
             # Note: We do NOT stream individual LLM tokens to avoid overwhelming EventQueue
@@ -166,31 +227,37 @@ class PMCopilotExecutor(AgentExecutor):
 
             # Send heartbeat on chain/node start to keep connection alive
             if event_type == "on_chain_start":
-                # Filter out verbose chain events, keep only meaningful nodes
-                node_names = ["conversation_router", "project_detector", "task_router",
-                             "tool_validator", "simple_executor", "plan_executor"]
-                if any(node in event_name for node in node_names):
-                    logger.debug(f"Node started: {event_name}")
-                    try:
-                        await updater.update_status(
-                            TaskState.working,
-                            new_agent_text_message(
-                                "Processing...", context.context_id, context.task_id
-                            ),
-                        )
-                    except Exception:
-                        # Queue might be closed, ignore for non-critical status
-                        pass
+                # Check if this is one of our tracked nodes
+                for node_name, message in node_messages.items():
+                    if node_name in event_name:
+                        logger.debug(f"Node started: {event_name}")
+                        try:
+                            await updater.update_status(
+                                TaskState.working,
+                                new_agent_text_message(
+                                    message, context.context_id, context.task_id
+                                ),
+                            )
+                        except Exception:
+                            # Queue might be closed, ignore for non-critical status
+                            pass
+                        break
 
             # Update status on tool calls
             elif event_type == "on_tool_start":
                 tool_name = event.get("name", "unknown_tool")
                 logger.debug(f"Tool started: {tool_name}")
+
+                # Get user-friendly display name or fallback to technical name
+                display_name = tool_display_names.get(
+                    tool_name, f"🔧 Using tool: {tool_name}"
+                )
+
                 try:
                     await updater.update_status(
                         TaskState.working,
                         new_agent_text_message(
-                            f"Using tool: {tool_name}", context.context_id, context.task_id
+                            display_name, context.context_id, context.task_id
                         ),
                     )
                 except Exception:

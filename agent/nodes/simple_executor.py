@@ -128,10 +128,7 @@ async def simple_executor(
         logger.info("Simple ReAct agent completed successfully")
 
         # Return updated messages with Command
-        return Command(
-            update={"messages": result["messages"]},
-            goto="__end__"
-        )
+        return Command(update={"messages": result["messages"]}, goto="__end__")
 
     except Exception as e:
         logger.error(f"Error in simple_executor: {e}", exc_info=True)
@@ -141,7 +138,4 @@ async def simple_executor(
         error_message = AIMessage(
             content=f"Произошла ошибка при выполнении запроса: {str(e)}\n\nПопробуйте переформулировать запрос или обратитесь к администратору."
         )
-        return Command(
-            update={"messages": [error_message]},
-            goto="__end__"
-        )
+        return Command(update={"messages": [error_message]}, goto="__end__")

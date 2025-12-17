@@ -1,6 +1,6 @@
 """Agent Card definition for PM Copilot Agent."""
 
-from a2a.types import AgentCard, AgentCapabilities, AgentSkill
+from a2a.types import AgentCapabilities, AgentCard, AgentSkill
 
 from agent.core.config import AgentSettings
 

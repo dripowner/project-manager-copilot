@@ -59,6 +59,7 @@ async def test_agent_state_update(mock_mcp_client, settings):
 async def test_graph_with_empty_tools(settings):
     """Test graph creation with no tools available."""
     from unittest.mock import AsyncMock
+
     from agent.core.mcp_client import MCPClientWrapper
 
     empty_client = AsyncMock(spec=MCPClientWrapper)

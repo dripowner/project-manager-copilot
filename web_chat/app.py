@@ -5,11 +5,12 @@ import logging
 import uuid
 
 import chainlit as cl
-import httpx
 from a2a.client import ClientFactory
 from a2a.client.client import Client, ClientConfig
-from a2a.types import Message, Task, TaskArtifactUpdateEvent, TaskStatusUpdateEvent, TextPart, Part
+from a2a.types import Message, Task, TextPart, Part
 
+from agent.core.messages import STATUS_INDICATORS
+from pm_mcp.core.validation import ValidationError, sanitize_user_input
 from web_chat.config import get_settings
 
 settings = get_settings()
@@ -86,94 +87,171 @@ async def on_message(message: cl.Message):
             ).send()
             return
 
-        # Создание пустого сообщения для streaming
-        msg = cl.Message(content="")
-        await msg.send()
-
         # Получаем context_id из сессии для сохранения истории разговора
         context_id = cl.user_session.get("context_id")
 
+        # Sanitize user input (XSS prevention, DoS prevention)
+        try:
+            sanitized_content = sanitize_user_input(message.content)
+        except ValidationError as e:
+            await cl.Message(content=f"❌ {str(e)}").send()
+            return
+
         # Создаем текстовое сообщение для A2A (user message)
-        text_part = TextPart(text=message.content)
+        text_part = TextPart(text=sanitized_content)
         part = Part(root=text_part)
         text_message = Message(
             messageId=str(uuid.uuid4()),
             contextId=context_id,  # Используем один context_id для всей сессии
             role="user",
-            parts=[part]
+            parts=[part],
         )
 
-        # Streaming через A2A protocol
-        current_content = ""
-        task_completed = False
+        # Tracking для обработанных сообщений и компонентов отображения
+        processed_message_ids = set()
+        current_step = None
+        final_answer_msg = None
+        final_answer_sent = False  # Track if final answer was sent (prevent duplicates)
+        task_state = None
 
         async for event in a2a_client.send_message(text_message):
             # A2A SDK возвращает tuple: (Task, event_data)
             if isinstance(event, tuple) and len(event) == 2:
                 task, event_data = event
-                logger.debug(f"Received: Task(state={task.status.state.value}), event={type(event_data).__name__ if event_data else 'None'}")
+                logger.debug(
+                    f"Received: Task(state={task.status.state.value}), event={type(event_data).__name__ if event_data else 'None'}"
+                )
 
-                # Обрабатываем сообщения из истории Task
+                # Обрабатываем новые сообщения из истории Task
                 if task.history:
                     for msg_item in task.history:
-                        if isinstance(msg_item, Message) and msg_item.role.value == "agent":
-                            # Извлекаем текст из последнего сообщения агента
+                        # Skip already processed messages
+                        if msg_item.message_id in processed_message_ids:
+                            continue
+
+                        if (
+                            isinstance(msg_item, Message)
+                            and msg_item.role.value == "agent"
+                        ):
+                            # Извлекаем текст из сообщения
+                            text_content = ""
                             for part in msg_item.parts:
                                 if hasattr(part.root, "text"):
-                                    text = part.root.text
-                                    # Добавляем только новый контент
-                                    if text not in current_content:
-                                        current_content += text
-                                        await msg.stream_token(text)
+                                    text_content = part.root.text
+                                    break
 
-                # Проверяем статус задачи
+                            if not text_content:
+                                continue
+
+                            # Отмечаем как обработанное
+                            processed_message_ids.add(msg_item.message_id)
+                            logger.debug(
+                                f"Processing message {msg_item.message_id}: {text_content[:50]}..."
+                            )
+
+                            # Determine message type by content (using STATUS_INDICATORS)
+                            all_indicators = (
+                                STATUS_INDICATORS["keywords"]
+                                + STATUS_INDICATORS["emojis"]
+                            )
+                            is_status = any(
+                                keyword in text_content for keyword in all_indicators
+                            )
+
+                            if is_status and task.status.state.value == "working":
+                                # Промежуточный статус - показываем как Step
+                                if current_step:
+                                    # Обновляем существующий step
+                                    current_step.output = text_content
+                                    await current_step.update()
+                                else:
+                                    # Создаем новый step
+                                    current_step = cl.Step(
+                                        name="Agent Progress", type="tool"
+                                    )
+                                    current_step.output = text_content
+                                    await current_step.send()
+
+                                logger.debug(
+                                    f"Updated step with status: {text_content}"
+                                )
+                            else:
+                                # Финальный ответ - закрываем Step и создаем сообщение
+                                if current_step:
+                                    # Закрываем текущий step перед финальным ответом
+                                    current_step = None
+
+                                if not final_answer_msg:
+                                    final_answer_msg = cl.Message(content="")
+                                    await final_answer_msg.send()
+
+                                # Stream финального ответа
+                                await final_answer_msg.stream_token(text_content)
+                                logger.debug(
+                                    f"Streamed final answer: {len(text_content)} chars"
+                                )
+
+                # Отслеживаем статус задачи
                 task_state = task.status.state.value
                 logger.debug(f"Task state: {task_state}")
 
                 if task_state in ["completed", "failed", "cancelled"]:
-                    task_completed = True
+                    # Закрываем текущий step если он есть
+                    if current_step:
+                        current_step = None
 
+                    # Обработка ошибок
                     if task_state == "failed":
-                        error_msg = "\n\nОшибка выполнения задачи."
+                        error_msg = "\n\n❌ Ошибка выполнения задачи."
                         if task.status.message:
                             error_msg += f" {task.status.message}"
-                        if error_msg not in current_content:
-                            current_content += error_msg
-                            await msg.stream_token(error_msg)
+
+                        if not final_answer_msg:
+                            final_answer_msg = cl.Message(content=error_msg)
+                            await final_answer_msg.send()
+                        else:
+                            await final_answer_msg.stream_token(error_msg)
 
                     elif task_state == "cancelled":
-                        cancel_msg = "\n\nЗадача была отменена."
-                        if cancel_msg not in current_content:
-                            current_content += cancel_msg
-                            await msg.stream_token(cancel_msg)
+                        cancel_msg = "\n\n⚠️ Задача была отменена."
+
+                        if not final_answer_msg:
+                            final_answer_msg = cl.Message(content=cancel_msg)
+                            await final_answer_msg.send()
+                        else:
+                            await final_answer_msg.stream_token(cancel_msg)
 
                 continue
 
             # Обработка старого формата (на случай если SDK изменится)
             if isinstance(event, Message):
-                logger.debug(f"Received standalone Message event")
-                if event.role.value == "agent":
-                    for part in event.parts:
-                        if hasattr(part.root, "text") and part.root.text not in current_content:
-                            current_content += part.root.text
-                            await msg.stream_token(part.root.text)
+                logger.debug("Received standalone Message event")
+                # Обработка через тот же механизм выше (добавится в task.history)
 
             elif isinstance(event, Task):
-                logger.debug(f"Received standalone Task event")
-                # Аналогичная обработка
-                pass
+                logger.debug("Received standalone Task event")
+                # Обработка через тот же механизм выше
 
             else:
                 logger.warning(f"Unknown event format: {type(event)}")
 
-        # Финализация сообщения
-        if current_content.strip():
-            msg.content = current_content
-        else:
-            msg.content = "Извините, не удалось получить ответ от агента."
+        # Финализация - убеждаемся что есть ответ (prevent duplicate sends)
+        if final_answer_msg and not final_answer_sent:
+            if final_answer_msg.content.strip():
+                await final_answer_msg.update()
+                final_answer_sent = True
+            else:
+                await cl.Message(
+                    content="Извините, не удалось получить ответ от агента."
+                ).send()
+                final_answer_sent = True
+        elif not final_answer_msg and not final_answer_sent:
+            await cl.Message(
+                content="Извините, не удалось получить ответ от агента."
+            ).send()
+            final_answer_sent = True
 
-        await msg.update()
-        logger.info(f"Message processing completed (task_completed={task_completed})")
+        logger.info(f"Message processing completed (task_state={task_state})")
 
     except Exception as e:
         logger.exception("Error processing message")

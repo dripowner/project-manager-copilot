@@ -53,23 +53,18 @@ async def simple_chat_response(state: AgentState, settings: AgentSettings) -> Co
             base_url=settings.openai_base_url,
         )
 
-        response = await llm.ainvoke([
-            SystemMessage(content=SIMPLE_CHAT_SYSTEM_PROMPT),
-            *messages
-        ])
+        response = await llm.ainvoke(
+            [SystemMessage(content=SIMPLE_CHAT_SYSTEM_PROMPT), *messages]
+        )
 
         logger.info("Simple chat response generated")
 
-        return Command(
-            update={"messages": [response]},
-            goto="__end__"
-        )
+        return Command(update={"messages": [response]}, goto="__end__")
 
     except Exception as e:
         logger.error(f"Error in simple_chat_response: {e}", exc_info=True)
         # Fallback response on error
-        fallback_message = AIMessage(content="Извините, произошла ошибка. Попробуйте еще раз.")
-        return Command(
-            update={"messages": [fallback_message]},
-            goto="__end__"
+        fallback_message = AIMessage(
+            content="Извините, произошла ошибка. Попробуйте еще раз."
         )
+        return Command(update={"messages": [fallback_message]}, goto="__end__")

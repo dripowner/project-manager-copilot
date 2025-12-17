@@ -10,11 +10,15 @@ from pydantic import Field
 
 from pm_mcp.core.errors import CalendarError
 from pm_mcp.tools.calendar.models import (
+    AccessInfo,
+    CalendarAccessVerificationResponse,
     CalendarEvent,
-    CalendarListEventsResponse,
-    CalendarInfo,
-    CalendarListResponse,
     CalendarFindResponse,
+    CalendarGrantAccessResponse,
+    CalendarInfo,
+    CalendarListEventsResponse,
+    CalendarListResponse,
+    GrantedAccessInfo,
 )
 
 
@@ -163,3 +167,165 @@ def register_calendar_tools(mcp: FastMCP) -> None:
             raise ToolError(e.message) from e
         except Exception as e:
             raise ToolError(f"Failed to find/create calendar: {e}") from e
+
+    @mcp.tool(
+        name="calendar_verify_project_access",
+        description="Verify user access to project calendar via ACL. "
+        "Use this to troubleshoot calendar access issues or validate permissions before operations. "
+        "Returns detailed access information including user role, ACL status, and troubleshooting data. "
+        "Automatically finds/creates calendar for the project.",
+    )
+    async def calendar_verify_project_access(
+        project_key: Annotated[
+            str,
+            Field(description="Jira project key (e.g., 'ALPHA', 'BETA')"),
+        ],
+        ctx: Context,
+        user_email: Annotated[
+            str | None,
+            Field(
+                description="User email to verify access for. "
+                "If not provided, uses calendar_owner_email from settings. "
+                "Example: 'user@example.com'"
+            ),
+        ] = None,
+    ) -> CalendarAccessVerificationResponse:
+        """Verify user access to project calendar via ACL."""
+        email_info = f" for {user_email}" if user_email else " (using default email)"
+        await ctx.info(
+            f"Verifying calendar access for project '{project_key}'{email_info}"
+        )
+
+        try:
+            calendar_service = ctx.fastmcp.calendar_service  # type: ignore[attr-defined]
+
+            result = await calendar_service.verify_project_access(
+                project_key=project_key,
+                user_email=user_email,
+            )
+
+            # Build human-readable message
+            calendar_name = result["calendar"]["name"]
+            checked_email = result["user_email"]
+            has_access = result["has_access"]
+            role = result["role"]
+            acl_count = result["acl_entries_count"]
+
+            if has_access:
+                access_status = f"HAS ACCESS with role '{role}'"
+            else:
+                access_status = "does NOT have access"
+
+            message = (
+                f"User '{checked_email}' {access_status} "
+                f"to calendar '{calendar_name}' (project: {project_key}). "
+                f"Total ACL entries: {acl_count}"
+            )
+
+            if result["calendar"].get("created"):
+                message += " [Calendar was just created - ACL not yet configured]"
+
+            await ctx.info(message)
+
+            return CalendarAccessVerificationResponse(
+                calendar=CalendarInfo(**result["calendar"]),
+                access=AccessInfo(
+                    has_access=result["has_access"],
+                    role=result["role"],
+                    user_email=result["user_email"],
+                    acl_entries_count=result["acl_entries_count"],
+                    service_account_email=result["service_account_email"],
+                ),
+                message=message,
+            )
+
+        except CalendarError as e:
+            await ctx.error(f"Calendar access verification failed: {e.message}")
+            raise ToolError(e.message) from e
+        except Exception as e:
+            await ctx.error(f"Unexpected error during access verification: {e}")
+            raise ToolError(f"Failed to verify calendar access: {e}") from e
+
+    @mcp.tool(
+        name="calendar_grant_access",
+        description="Grant calendar access to user by adding/updating ACL entry. "
+        "Use this to share project calendars with team members. "
+        "Automatically finds/creates calendar for the project. "
+        "Supports role updates if user already has access with different role. "
+        "Idempotent: safe to call multiple times with same parameters.",
+    )
+    async def calendar_grant_access(
+        project_key: Annotated[
+            str,
+            Field(description="Jira project key (e.g., 'ALPHA', 'BETA')"),
+        ],
+        user_email: Annotated[
+            str,
+            Field(
+                description="Email address to grant access to. Example: 'user@example.com'"
+            ),
+        ],
+        ctx: Context,
+        role: Annotated[
+            str,
+            Field(
+                description="ACL role to grant. Options: 'owner', 'writer', 'reader', 'freeBusyReader'. "
+                "Default: 'writer' (can create/edit events)"
+            ),
+        ] = "writer",
+    ) -> CalendarGrantAccessResponse:
+        """Grant calendar access to user via ACL."""
+        await ctx.info(
+            f"Granting '{role}' access to '{user_email}' for project '{project_key}'"
+        )
+
+        try:
+            calendar_service = ctx.fastmcp.calendar_service  # type: ignore[attr-defined]
+
+            result = await calendar_service.grant_project_access(
+                project_key=project_key,
+                user_email=user_email,
+                role=role,
+            )
+
+            # Build human-readable message
+            calendar_name = result["calendar"]["name"]
+            action_taken = result["action_taken"]
+            granted_role = result["role"]
+            previous_role = result["previous_role"]
+
+            if action_taken == "granted":
+                message = (
+                    f"Successfully granted '{granted_role}' access to '{user_email}' "
+                    f"for calendar '{calendar_name}' (project: {project_key})"
+                )
+            elif action_taken == "updated":
+                message = (
+                    f"Updated access for '{user_email}' on calendar '{calendar_name}' "
+                    f"(project: {project_key}): '{previous_role}' -> '{granted_role}'"
+                )
+            else:  # already_exists
+                message = (
+                    f"User '{user_email}' already has '{granted_role}' access "
+                    f"to calendar '{calendar_name}' (project: {project_key}). No changes made."
+                )
+
+            await ctx.info(message)
+
+            return CalendarGrantAccessResponse(
+                calendar=CalendarInfo(**result["calendar"]),
+                access=GrantedAccessInfo(
+                    user_email=result["user_email"],
+                    role=result["role"],
+                    action_taken=result["action_taken"],
+                    previous_role=result["previous_role"],
+                ),
+                message=message,
+            )
+
+        except CalendarError as e:
+            await ctx.error(f"Failed to grant calendar access: {e.message}")
+            raise ToolError(e.message) from e
+        except Exception as e:
+            await ctx.error(f"Unexpected error during access grant: {e}")
+            raise ToolError(f"Failed to grant calendar access: {e}") from e

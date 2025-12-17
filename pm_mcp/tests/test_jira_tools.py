@@ -3,6 +3,7 @@
 import pytest
 from fastmcp import Client
 
+from pm_mcp.services.base import escape_query_value
 from pm_mcp.tests.mocks.mock_services import MockJiraService
 
 
@@ -102,7 +103,6 @@ async def test_jira_add_comment(
 
 
 # Tests for JQL escaping utility function
-from pm_mcp.services.base import escape_query_value
 
 
 class TestEscapeQueryValue:

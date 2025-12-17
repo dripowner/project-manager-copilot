@@ -25,11 +25,13 @@ async def ask_project_key(state: AgentState) -> Command:
     """
     logger.info("Asking user for project_key")
 
-    question = AIMessage(content="""Для выполнения этого запроса мне нужно знать, с каким Jira проектом работать.
+    question = AIMessage(
+        content="""Для выполнения этого запроса мне нужно знать, с каким Jira проектом работать.
 
-Пожалуйста, укажите ключ проекта (например: ALPHA, BETA, GAMMA).""")
+Пожалуйста, укажите ключ проекта (например: ALPHA, BETA, GAMMA)."""
+    )
 
     return Command(
         update={"messages": [question]},
-        goto="__end__"  # Wait for user response
+        goto="__end__",  # Wait for user response
     )

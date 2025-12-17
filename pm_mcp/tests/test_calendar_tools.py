@@ -3,6 +3,7 @@
 import pytest
 from fastmcp import Client
 
+from pm_mcp.services.calendar_service import CalendarService
 from pm_mcp.tests.mocks.mock_services import MockCalendarService
 
 
@@ -366,7 +367,6 @@ async def test_calendar_grant_access_reader_role(
 
 
 # Unit tests for CalendarService methods (PHASE 2 security improvements)
-from pm_mcp.services.calendar_service import CalendarService
 
 
 class TestCalendarMetadataParsing:

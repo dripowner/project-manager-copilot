@@ -2,6 +2,7 @@
 
 import logging
 from contextlib import contextmanager
+
 from prometheus_client import Counter, Histogram
 
 from pm_mcp.config import get_settings

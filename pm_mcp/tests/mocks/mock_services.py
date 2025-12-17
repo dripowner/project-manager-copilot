@@ -19,6 +19,8 @@ class MockCalendarService:
         self.create_project_calendar = AsyncMock(
             side_effect=self._create_project_calendar
         )
+        self.verify_project_access = AsyncMock(side_effect=self._verify_project_access)
+        self.grant_project_access = AsyncMock(side_effect=self._grant_project_access)
 
         # In-memory storage: event_id -> extendedProperties.private
         self._events_metadata: dict[str, dict[str, Any]] = {}
@@ -57,6 +59,26 @@ class MockCalendarService:
             },
         }
         self._calendar_counter = 0
+
+        # Mock ACL storage: calendar_id -> list of ACL entries
+        self._calendar_acl: dict[str, list[dict[str, Any]]] = {
+            "calendar_alpha": [
+                {
+                    "role": "owner",
+                    "scope": {"type": "user", "value": "owner@example.com"},
+                },
+                {
+                    "role": "writer",
+                    "scope": {"type": "user", "value": "writer@example.com"},
+                },
+            ],
+            "calendar_beta": [
+                {
+                    "role": "owner",
+                    "scope": {"type": "user", "value": "owner@example.com"},
+                },
+            ],
+        }
 
     def _default_events(self) -> list[dict[str, Any]]:
         return [
@@ -181,6 +203,128 @@ class MockCalendarService:
 
         # Not found -> create
         return await self._create_project_calendar(project_key, confluence_space_key)
+
+    async def _verify_project_access(
+        self,
+        project_key: str,
+        user_email: str | None = None,
+    ) -> dict[str, Any]:
+        """Mock verify project access."""
+        # Default email if not provided
+        if not user_email:
+            user_email = "owner@example.com"
+
+        # Find or create calendar
+        calendar = await self._find_or_create_project_calendar(project_key=project_key)
+        calendar_id = calendar["calendar_id"]
+
+        # Get ACL for this calendar (default to empty if not set)
+        acl_items = self._calendar_acl.get(calendar_id, [])
+
+        # Find user in ACL
+        user_acl = None
+        for acl_entry in acl_items:
+            scope = acl_entry.get("scope", {})
+            if scope.get("type") == "user" and scope.get("value") == user_email:
+                user_acl = acl_entry
+                break
+
+        return {
+            "calendar": calendar,
+            "has_access": user_acl is not None,
+            "role": user_acl.get("role") if user_acl else None,
+            "user_email": user_email,
+            "acl_entries_count": len(acl_items),
+            "service_account_email": "service-account@example.iam.gserviceaccount.com",
+        }
+
+    async def _grant_project_access(
+        self,
+        project_key: str,
+        user_email: str,
+        role: str = "writer",
+    ) -> dict[str, Any]:
+        """Mock grant project access."""
+        # Validate role (matches real service)
+        valid_roles = {"owner", "writer", "reader", "freeBusyReader"}
+        if role not in valid_roles:
+            from pm_mcp.core.errors import CalendarError
+
+            raise CalendarError(
+                message=f"Invalid role '{role}'. Must be one of: {', '.join(sorted(valid_roles))}",
+                details={
+                    "provided_role": role,
+                    "valid_roles": sorted(valid_roles),
+                },
+            )
+
+        # Validate user_email
+        if not user_email:
+            from pm_mcp.core.errors import CalendarError
+
+            raise CalendarError(
+                message="user_email is required and cannot be empty",
+                details={"hint": "Provide a valid user email address"},
+            )
+
+        # Find or create calendar
+        calendar = await self._find_or_create_project_calendar(project_key=project_key)
+        calendar_id = calendar["calendar_id"]
+
+        # Get current ACL (default to empty if not set)
+        acl_items = self._calendar_acl.get(calendar_id, [])
+
+        # Find existing user ACL entry
+        existing_acl = None
+        existing_index = None
+        for idx, acl_entry in enumerate(acl_items):
+            scope = acl_entry.get("scope", {})
+            if scope.get("type") == "user" and scope.get("value") == user_email:
+                existing_acl = acl_entry
+                existing_index = idx
+                break
+
+        action_taken = "granted"
+        previous_role = None
+
+        if existing_acl:
+            current_role = existing_acl.get("role")
+            if current_role == role:
+                # Already has the exact role
+                action_taken = "already_exists"
+            else:
+                # Update role
+                acl_items[existing_index] = {
+                    "role": role,
+                    "scope": {"type": "user", "value": user_email},
+                }
+                action_taken = "updated"
+                previous_role = current_role
+        else:
+            # Create new ACL entry
+            new_acl = {
+                "role": role,
+                "scope": {"type": "user", "value": user_email},
+            }
+            acl_items.append(new_acl)
+            action_taken = "granted"
+
+        # Update ACL storage
+        self._calendar_acl[calendar_id] = acl_items
+
+        return {
+            "calendar": calendar,
+            "user_email": user_email,
+            "role": role,
+            "action_taken": action_taken,
+            "previous_role": previous_role,
+        }
+
+    def set_calendar_acl(
+        self, calendar_id: str, acl_entries: list[dict[str, Any]]
+    ) -> None:
+        """Set ACL entries for a calendar (helper for testing)."""
+        self._calendar_acl[calendar_id] = acl_entries
 
 
 class MockJiraService:

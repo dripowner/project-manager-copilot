@@ -31,7 +31,9 @@ async def project_detector(state: AgentState, settings: AgentSettings) -> Comman
 
     # If already have project_key, skip detection
     if current_project_key:
-        logger.info(f"Project key already set: {current_project_key}, skipping detection")
+        logger.info(
+            f"Project key already set: {current_project_key}, skipping detection"
+        )
         return Command(goto="task_router")
 
     messages = state["messages"]
@@ -39,10 +41,12 @@ async def project_detector(state: AgentState, settings: AgentSettings) -> Comman
 
     try:
         # Build conversation history for prompt
-        conversation_history = "\n".join([
-            f"{'User' if i % 2 == 0 else 'Assistant'}: {msg.content}"
-            for i, msg in enumerate(messages)
-        ])
+        conversation_history = "\n".join(
+            [
+                f"{'User' if i % 2 == 0 else 'Assistant'}: {msg.content}"
+                for i, msg in enumerate(messages)
+            ]
+        )
 
         # Use LLM to extract project_key
         llm = ChatOpenAI(
@@ -52,7 +56,9 @@ async def project_detector(state: AgentState, settings: AgentSettings) -> Comman
             base_url=settings.openai_base_url,
         )
 
-        prompt = PROJECT_DETECTION_PROMPT.format(conversation_history=conversation_history)
+        prompt = PROJECT_DETECTION_PROMPT.format(
+            conversation_history=conversation_history
+        )
         response = await llm.ainvoke([HumanMessage(content=prompt)])
 
         detected_key = response.content.strip().upper()
@@ -68,8 +74,7 @@ async def project_detector(state: AgentState, settings: AgentSettings) -> Comman
             )
 
             return Command(
-                update={"project_context": updated_context},
-                goto="task_router"
+                update={"project_context": updated_context}, goto="task_router"
             )
         else:
             logger.info("No project key detected, continuing without it")

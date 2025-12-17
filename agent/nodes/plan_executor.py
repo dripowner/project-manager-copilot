@@ -7,7 +7,7 @@ from langgraph.types import Command
 
 from agent.core.config import AgentSettings
 from agent.core.mcp_client import MCPClientWrapper
-from agent.core.state import AgentState, Plan, Step
+from agent.core.state import AgentState
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +53,7 @@ async def plan_executor(
                 error_msg = AIMessage(
                     content="Не удалось создать план выполнения. Попробуйте переформулировать запрос."
                 )
-                return Command(
-                    update={"messages": [error_msg]},
-                    goto="__end__"
-                )
+                return Command(update={"messages": [error_msg]}, goto="__end__")
 
             logger.info(f"Plan created with {len(new_plan.steps)} steps")
 
@@ -66,18 +63,13 @@ async def plan_executor(
                     "plan": new_plan,
                     "remaining_steps": remaining_steps - 1,
                 },
-                goto="plan_executor"  # Self-loop to Phase 2
+                goto="plan_executor",  # Self-loop to Phase 2
             )
 
         except Exception as e:
             logger.error(f"Error in planning phase: {e}", exc_info=True)
-            error_msg = AIMessage(
-                content=f"Ошибка при создании плана: {str(e)}"
-            )
-            return Command(
-                update={"messages": [error_msg]},
-                goto="__end__"
-            )
+            error_msg = AIMessage(content=f"Ошибка при создании плана: {str(e)}")
+            return Command(update={"messages": [error_msg]}, goto="__end__")
 
     # Phase 2: Execution (if plan exists but not finished)
     if plan.current_step_idx < len(plan.steps):
@@ -103,7 +95,9 @@ async def plan_executor(
 
             # Check if step failed critically
             if current_step.status == "failed":
-                logger.error(f"Step {plan.current_step_idx + 1} failed: {current_step.error}")
+                logger.error(
+                    f"Step {plan.current_step_idx + 1} failed: {current_step.error}"
+                )
 
                 # For now, continue to next step unless it's the last step
                 if plan.current_step_idx >= len(plan.steps) - 1:
@@ -116,7 +110,7 @@ async def plan_executor(
                             "plan": updated_plan,
                             "messages": updated_messages + [failure_msg],
                         },
-                        goto="__end__"
+                        goto="__end__",
                     )
 
             # Check if we've exceeded max iterations
@@ -130,7 +124,7 @@ async def plan_executor(
                         "plan": updated_plan,
                         "messages": updated_messages + [timeout_msg],
                     },
-                    goto="__end__"
+                    goto="__end__",
                 )
 
             # Continue to next step
@@ -141,18 +135,13 @@ async def plan_executor(
                     "messages": updated_messages,
                     "remaining_steps": remaining_steps - 1,
                 },
-                goto="plan_executor"  # Self-loop to next step
+                goto="plan_executor",  # Self-loop to next step
             )
 
         except Exception as e:
             logger.error(f"Error in execution phase: {e}", exc_info=True)
-            error_msg = AIMessage(
-                content=f"Ошибка при выполнении шага: {str(e)}"
-            )
-            return Command(
-                update={"messages": [error_msg]},
-                goto="__end__"
-            )
+            error_msg = AIMessage(content=f"Ошибка при выполнении шага: {str(e)}")
+            return Command(update={"messages": [error_msg]}, goto="__end__")
 
     # Phase 3: Completion (all steps finished)
     logger.info("Phase 3: Plan execution completed, generating summary")
@@ -191,7 +180,4 @@ async def plan_executor(
 
     final_message = AIMessage(content=summary)
 
-    return Command(
-        update={"messages": [final_message]},
-        goto="__end__"
-    )
+    return Command(update={"messages": [final_message]}, goto="__end__")
