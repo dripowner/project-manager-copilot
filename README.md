@@ -32,7 +32,7 @@ cd cloudru-mcp
 uv sync --all-groups
 
 # 3. Копирование конфигурации
-cp .env.example.local .env
+cp .env.example .env
 
 # 4. ⚠️ ВАЖНО: Установите обязательные секреты!
 # Сгенерируйте пароли и секреты (см. раздел "4. Авторизация"):
@@ -57,7 +57,7 @@ git clone <repository-url>
 cd cloudru-mcp
 
 # 2. Копирование конфигурации
-cp .env.example.local .env
+cp .env.example .env
 
 # 3. ⚠️ ВАЖНО: Установите обязательные секреты!
 # Сгенерируйте пароли и секреты (см. раздел "4. Авторизация"):
