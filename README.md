@@ -9,6 +9,8 @@ MCP-сервер для интеграции инструментов проек
 - **Google Calendar**: просмотр событий и встреч (multi-calendar архитектура)
 - **PM Layer**: связывание встреч с задачами Jira, отслеживание action items
 - **A2A Agent**: PM Copilot агент с поддержкой Agent-to-Agent протокола
+- **Web Chat**: Веб-интерфейс с многопользовательской авторизацией (Chainlit)
+- **Multi-User Auth**: Email/пароль + OAuth (Google, GitHub) через FastAPI Users
 - **Observability**: OpenTelemetry трассировка и Prometheus метрики
 
 ## Требования
@@ -32,12 +34,18 @@ uv sync --all-groups
 # 3. Копирование конфигурации
 cp .env.example.local .env
 
-# 4. Заполните .env файл (см. раздел "Конфигурация")
+# 4. ⚠️ ВАЖНО: Установите обязательные секреты!
+# Сгенерируйте пароли и секреты (см. раздел "4. Авторизация"):
+openssl rand -base64 32  # POSTGRES_PASSWORD
+openssl rand -base64 48  # AUTH_SECRET_KEY
+openssl rand -base64 48  # CHAINLIT_AUTH_SECRET
 
-# 5. Запуск MCP сервера
+# 5. Заполните .env файл (см. раздел "Конфигурация")
+
+# 6. Запуск MCP сервера
 uv run python -m pm_mcp
 
-# 6. (Опционально) Запуск A2A агента в другом терминале
+# 7. (Опционально) Запуск A2A агента в другом терминале
 uv run python -m agent
 ```
 
@@ -51,13 +59,28 @@ cd cloudru-mcp
 # 2. Копирование конфигурации
 cp .env.example.local .env
 
-# 3. Заполните .env файл (см. раздел "Конфигурация")
+# 3. ⚠️ ВАЖНО: Установите обязательные секреты!
+# Сгенерируйте пароли и секреты (см. раздел "4. Авторизация"):
+openssl rand -base64 32  # POSTGRES_PASSWORD
+openssl rand -base64 48  # AUTH_SECRET_KEY
+openssl rand -base64 48  # CHAINLIT_AUTH_SECRET
 
-# 4. Запуск всего стека
+# 4. Заполните .env файл (см. раздел "Конфигурация")
+
+# 5. Запуск PostgreSQL и auth-service
+docker compose up -d postgres auth-service
+
+# 6. Применение миграций базы данных
+docker compose exec auth-service uv run alembic upgrade head
+
+# 7. Запуск всего стека
 docker compose up -d
 
-# 5. Просмотр логов
+# 8. Просмотр логов
 docker compose logs -f
+
+# 9. Откройте web chat в браузере
+# http://localhost:8002
 ```
 
 ## Конфигурация
@@ -197,7 +220,58 @@ OPENAI_BASE_URL=https://your-llm-provider.com/v1
 OPENAI_BASE_MODEL=model-name
 ```
 
-### 4. MCP Server и A2A Agent
+### 4. Авторизация (для веб-интерфейса)
+
+⚠️ **ВАЖНО: Требования безопасности**
+
+Следующие переменные являются **ОБЯЗАТЕЛЬНЫМИ** и должны быть установлены перед запуском:
+
+- `POSTGRES_PASSWORD` — минимум 16 символов
+- `AUTH_SECRET_KEY` — минимум 32 символа
+- `CHAINLIT_AUTH_SECRET` — минимум 32 символа
+
+Docker Compose **не запустится** без этих переменных (выдаст ошибку).
+
+**Генерация безопасных секретов:**
+
+```bash
+# PostgreSQL пароль (минимум 16 символов)
+openssl rand -base64 32
+
+# AUTH_SECRET_KEY и CHAINLIT_AUTH_SECRET (минимум 32 символа)
+openssl rand -base64 48
+```
+
+**Настройка в `.env`:**
+
+```env
+# PostgreSQL (для хранения пользователей)
+POSTGRES_USER=pm_user
+# ОБЯЗАТЕЛЬНО: Замените на сгенерированный пароль!
+POSTGRES_PASSWORD=YOUR_GENERATED_PASSWORD_HERE
+
+# Auth Service
+# Автоматически использует POSTGRES_PASSWORD из выше
+DATABASE_URL=postgresql+asyncpg://pm_user:${POSTGRES_PASSWORD}@postgres:5432/pm_copilot
+
+# ОБЯЗАТЕЛЬНО: Замените на сгенерированный секрет (мин. 32 символа)!
+AUTH_SECRET_KEY=YOUR_GENERATED_SECRET_KEY_HERE
+
+# ОБЯЗАТЕЛЬНО: Замените на сгенерированный секрет (мин. 32 символа)!
+CHAINLIT_AUTH_SECRET=YOUR_GENERATED_CHAINLIT_SECRET_HERE
+
+# OAuth (опционально - оставьте пустыми для использования только email/пароль)
+# Google: https://console.cloud.google.com/apis/credentials
+# GitHub: https://github.com/settings/developers
+GOOGLE_OAUTH_CLIENT_ID=
+GOOGLE_OAUTH_CLIENT_SECRET=
+GITHUB_OAUTH_CLIENT_ID=
+GITHUB_OAUTH_CLIENT_SECRET=
+```
+
+**Примечание:** Авторизация требуется только для доступа к веб-интерфейсу (web_chat). A2A агент остается открытым для интеграций.
+
+### 5. MCP Server и A2A Agent
 
 ```env
 # MCP Server настройки
@@ -216,7 +290,7 @@ DEFAULT_PROJECT_KEY=PROJ
 DEFAULT_SPRINT_NAME=Sprint 1
 ```
 
-### 5. Observability (опционально)
+### 6. Observability (опционально)
 
 ```env
 # Логирование
@@ -239,6 +313,20 @@ OTEL_SERVICE_NAME=pm-mcp-server
 - **Автосоздание**: календари создаются при первом обращении
 - **Изоляция данных**: события разных проектов хранятся в отдельных календарях
 - **Метаданные**: связка с проектом сохраняется в описании календаря
+
+### Первичная настройка базы данных
+
+При первом запуске необходимо применить миграции:
+
+```bash
+# Локально
+uv run alembic upgrade head
+
+# Или через Docker
+docker compose exec auth-service uv run alembic upgrade head
+```
+
+Для создания первого пользователя используйте web_chat интерфейс (регистрация доступна без авторизации).
 
 ## Запуск
 
@@ -385,6 +473,77 @@ curl http://localhost:8001/.well-known/agent-card.json
   "skills": [...]
 }
 ```
+
+## PM Copilot Web Chat
+
+Веб-интерфейс для взаимодействия с PM Copilot агентом через браузер с поддержкой многопользовательской авторизации.
+
+### Запуск Web Chat
+
+```bash
+# Локально (требуется запущенный A2A агент и auth-service)
+uv run chainlit run web_chat/app.py --host 0.0.0.0 --port 8002
+
+# Или через Docker (запускает весь стек)
+docker compose up -d web-chat
+```
+
+Интерфейс будет доступен по адресу `http://localhost:8002`
+
+### Функции авторизации
+
+**Dual Authentication:**
+
+- **Email/Пароль**: Регистрация и вход через форму
+- **OAuth**: Вход через Google или GitHub (требуется настройка OAuth credentials)
+
+**Первый запуск:**
+
+1. Откройте `http://localhost:8002`
+2. Нажмите "Sign Up" для создания учетной записи
+3. Заполните email и пароль
+4. После регистрации войдите в систему
+
+**User Profile:**
+
+- `full_name` - отображается в интерфейсе
+- `avatar_url` - аватар пользователя
+- `default_project_key` - проект по умолчанию для быстрого доступа
+
+### Настройка OAuth (опционально)
+
+Для включения входа через Google/GitHub:
+
+1. **Google OAuth:**
+   - Создайте OAuth App в [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
+   - Добавьте Authorized redirect URI: `http://localhost:8002/auth/oauth/google/callback`
+   - Скопируйте Client ID и Client Secret в `.env`
+
+2. **GitHub OAuth:**
+   - Создайте OAuth App в [GitHub Settings](https://github.com/settings/developers)
+   - Добавьте Authorization callback URL: `http://localhost:8002/auth/oauth/github/callback`
+   - Скопируйте Client ID и Client Secret в `.env`
+
+3. **Создайте `.chainlit/config.toml`** (опционально, для кастомизации):
+
+```toml
+[auth]
+enable_password_auth = true
+
+[auth.oauth_google]
+client_id = "${GOOGLE_OAUTH_CLIENT_ID}"
+client_secret = "${GOOGLE_OAUTH_CLIENT_SECRET}"
+
+[auth.oauth_github]
+client_id = "${GITHUB_OAUTH_CLIENT_ID}"
+client_secret = "${GITHUB_OAUTH_CLIENT_SECRET}"
+```
+
+### Важно: Безопасность
+
+- **Агент остается открытым**: A2A agent (`http://localhost:8001`) доступен без авторизации для интеграций
+- **Web chat защищен**: Доступ к веб-интерфейсу только для авторизованных пользователей
+- **User context**: Информация о пользователе передается в агент для аудита (но НЕ для проверки доступа)
 
 ## Подключение клиентов
 

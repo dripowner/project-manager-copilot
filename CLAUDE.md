@@ -38,12 +38,17 @@ uv run ruff format pm_mcp/
 ## Docker
 
 ```bash
-# Start full stack (mcp-server + agent-a2a)
+# Start full stack (postgres + auth-service + mcp-server + agent-a2a + web-chat)
 docker compose up -d
+
+# Run database migrations (first time setup)
+docker compose run --rm auth-service uv run alembic upgrade head
 
 # Rebuild after code changes
 docker compose up -d --build mcp-server
 docker compose up -d --build agent-a2a
+docker compose up -d --build auth-service
+docker compose up -d --build web-chat
 ```
 
 ## A2A Agent Server
@@ -115,6 +120,106 @@ AGENT_VERSION=v1.0.0
 
 ## Architecture
 
+### Multi-User Authentication
+
+PM Copilot supports multi-user authentication with dual auth methods:
+
+#### Components
+
+1. **auth_service** ([auth_service/](auth_service/)) - FastAPI service for user authentication:
+   - Email/password registration and login (FastAPI Users)
+   - OAuth support (Google, GitHub) via Chainlit
+   - User management with custom fields (full_name, avatar_url, default_project_key)
+   - PostgreSQL database with async SQLAlchemy
+   - JWT authentication backend
+
+2. **web_chat** ([web_chat/](web_chat/)) - Chainlit web interface with authentication:
+   - Password auth callback → auth_service login endpoint
+   - OAuth callback → auth_service OAuth endpoints
+   - User metadata passed to agent via A2A Message.metadata
+
+3. **Agent User Context** ([agent/a2a/converters.py:125-179](agent/a2a/converters.py#L125-L179)):
+   - Extracts user info from A2A metadata for **audit logging only**
+   - **IMPORTANT**: Agent does NOT enforce authorization
+   - User context includes: user_id, user_email, user_full_name, default_project_key
+
+#### Authentication Flow
+
+```text
+User → web_chat (Chainlit) → auth_service (FastAPI Users)
+              ↓                         ↓
+        agent-a2a (NO AUTH)       PostgreSQL
+              ↓
+        mcp-server
+```
+
+**Key Principles:**
+
+- **Authorization at web_chat only**: Users must authenticate to access web interface
+- **Agent remains open**: A2A agent accepts requests without auth (for integrations)
+- **User context for audit**: User info logged but NOT used for access control
+- **Dual auth methods**: Email/password + OAuth (both work simultaneously)
+
+#### Database Schema
+
+**Users table** ([migrations/versions/a46f779a458d_create_users_and_oauth_accounts_tables.py:24-38](migrations/versions/a46f779a458d_create_users_and_oauth_accounts_tables.py#L24-L38)):
+
+- id (UUID), email, hashed_password
+- is_active, is_superuser, is_verified (from FastAPI Users)
+- full_name, avatar_url, default_project_key (custom fields)
+- created_at, updated_at
+
+**OAuth accounts table** ([migrations/versions/a46f779a458d_create_users_and_oauth_accounts_tables.py:40-55](migrations/versions/a46f779a458d_create_users_and_oauth_accounts_tables.py#L40-L55)):
+
+- id (UUID), user_id (FK), oauth_name, access_token
+- account_id, account_email
+- Unique constraint: (oauth_name, account_id)
+
+#### Configuration
+
+**SECURITY REQUIREMENTS:**
+- `POSTGRES_PASSWORD` — minimum 16 characters (REQUIRED)
+- `AUTH_SECRET_KEY` — minimum 32 characters (REQUIRED)
+- `CHAINLIT_AUTH_SECRET` — minimum 32 characters (REQUIRED)
+
+Docker Compose will fail to start without these variables set.
+
+Required environment variables ([.env.example:26-49](.env.example#L26-L49)):
+
+```bash
+# PostgreSQL
+POSTGRES_USER=pm_user
+# REQUIRED: Generate with: openssl rand -base64 32
+POSTGRES_PASSWORD=<your-strong-password-min-16-chars>
+
+# Auth Service
+# Uses POSTGRES_PASSWORD from above
+DATABASE_URL=postgresql+asyncpg://pm_user:${POSTGRES_PASSWORD}@postgres:5432/pm_copilot
+
+# REQUIRED: Generate with: openssl rand -base64 48 (min 32 chars)
+AUTH_SECRET_KEY=<your-secret-key-min-32-chars>
+CHAINLIT_AUTH_SECRET=<your-chainlit-secret-min-32-chars>
+
+# OAuth (optional)
+GOOGLE_OAUTH_CLIENT_ID=
+GOOGLE_OAUTH_CLIENT_SECRET=
+GITHUB_OAUTH_CLIENT_ID=
+GITHUB_OAUTH_CLIENT_SECRET=
+```
+
+#### Database Migrations
+
+```bash
+# Run migrations (first time or after model changes)
+uv run alembic upgrade head
+
+# Create new migration (after model changes)
+uv run alembic revision --autogenerate -m "Description"
+
+# Rollback last migration
+uv run alembic downgrade -1
+```
+
 ### Service Layer Pattern
 
 Services are attached to the FastMCP instance and accessed via `ctx.fastmcp` in tool handlers:
@@ -155,49 +260,63 @@ Each Jira project has its own Google Calendar:
 
 ### Agent Storage Architecture
 
-PM Copilot Agent (A2A server) uses **in-memory storage** for both conversation state and task metadata:
+PM Copilot Agent uses **hybrid storage** for production:
 
-#### Conversation Checkpointing (MemorySaver)
+#### Conversation Checkpointing (AsyncPostgresSaver)
 
-- Implementation: `MemorySaver` from LangGraph
-- Location: `agent/core/checkpointer.py`
-- Persistence: None (lost on restart)
-- Purpose: Track conversation state within a single agent session
+- **Implementation**: `AsyncPostgresSaver` from `langgraph-checkpoint-postgres`
+- **Location**: `agent/core/checkpointer.py`
+- **Persistence**: PostgreSQL (same database as auth_service: `pm_copilot`)
+- **Purpose**: Track conversation state and LangGraph checkpoints
+- **Tables**: `checkpoints`, `checkpoint_blobs`, `checkpoint_writes`
+- **Configuration**: `AGENT_DATABASE_URL` environment variable
+
+#### Chat Session Management (ChatSession model)
+
+- **Implementation**: SQLAlchemy model with async PostgreSQL
+- **Location**: `auth_service/models/chat_session.py`
+- **Persistence**: PostgreSQL (same database)
+- **Purpose**: Map users to their conversation threads (multi-chat support)
+- **API**: `/users/me/chat_sessions` endpoints in auth_service
+- **Features**:
+  - Auto-generated chat titles from first message
+  - Soft limit: 100 active chats per user (auto-archives oldest)
+  - Message count tracking
+  - Last activity timestamp
 
 #### Task Metadata Store (InMemoryTaskStore)
 
-- Implementation: `InMemoryTaskStore` from a2a-sdk
-- Location: `agent/a2a/server.py`
-- Persistence: None (lost on restart)
-- Purpose: Store A2A task metadata during agent execution
+- **Implementation**: `InMemoryTaskStore` from a2a-sdk
+- **Location**: `agent/a2a/server.py`
+- **Persistence**: None (in-memory, lost on restart)
+- **Purpose**: Store A2A task metadata during agent execution
+- **Rationale**: A2A tasks are short-lived (seconds to minutes), conversation state already persisted in AsyncPostgresSaver
 
-#### Important notes
+#### Database Schema
 
-- Both conversation history and task metadata are ephemeral (in-memory only)
-- All state is lost when agent restarts
-- No database dependencies required
-- Suitable for stateless A2A protocol interactions
+Single PostgreSQL database (`pm_copilot`) contains:
 
-#### Operational Implications
+- `users`, `oauth_accounts` (auth_service)
+- `chat_sessions` (auth_service, user → thread mapping)
+- `checkpoints`, `checkpoint_blobs`, `checkpoint_writes` (LangGraph)
 
-**When to use in-memory storage:**
+#### Key Features
 
-- Development and testing environments
-- Stateless agents where each interaction is independent
-- Single-instance deployments without load balancing
-- Short-lived conversations (seconds to minutes)
+- **Conversation history persists** across agent restarts via AsyncPostgresSaver
+- **Multi-chat support**: Users can have up to 100 active chats simultaneously
+- **Thread isolation**: Each chat has unique thread_id (context_id from A2A protocol)
+- **Automatic cleanup**: Oldest chat auto-archived when user exceeds 100 chats
 
-**Limitations to be aware of:**
+#### When to migrate to DatabaseTaskStore
 
-- **No conversation replay**: Previous conversations cannot be resumed or debugged after restart
-- **Tasks must complete before restart**: In-flight A2A tasks are lost on agent shutdown
-- **Not suitable for**: Multi-hour conversations, distributed/load-balanced deployments, or production environments requiring audit trails
-- **Debugging constraints**: Cannot inspect conversation history after crashes
+Consider migrating InMemoryTaskStore → DatabaseTaskStore if you need:
 
-**Migration to persistent storage**: If you need persistence, switch to:
+- Long-running tasks (hours/days) that survive agent restarts
+- Compliance audit trail for all A2A task transitions
+- Distributed agent deployment (task metadata shared across instances)
+- Task retry/replay functionality
 
-- Conversation state: PostgresSaver (langgraph-checkpoint-postgres)
-- Task metadata: DatabaseTaskStore with a2a-sdk[sql]
+For migration, install `a2a-sdk[postgresql]` and configure `USE_DATABASE_TASK_STORE=true`.
 
 ### Adding New Tools
 
