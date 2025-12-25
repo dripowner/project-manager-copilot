@@ -23,6 +23,27 @@ class ChainlitSettings(BaseSettings):
     )
     a2a_server_port: int = Field(default=8001, description="A2A Agent server port")
 
+    # Authentication
+    auth_service_url: str = Field(
+        default="http://auth-service:8003",
+        description="Auth service URL for user authentication",
+    )
+    chainlit_auth_secret: str = Field(
+        ...,  # Required, no default
+        description="Secret key for Chainlit session management (REQUIRED - min 32 characters)",
+        min_length=32,
+    )
+
+    # OAuth credentials (optional - leave empty to disable OAuth)
+    google_oauth_client_id: str = Field(default="", description="Google OAuth client ID")
+    google_oauth_client_secret: str = Field(
+        default="", description="Google OAuth client secret"
+    )
+    github_oauth_client_id: str = Field(default="", description="GitHub OAuth client ID")
+    github_oauth_client_secret: str = Field(
+        default="", description="GitHub OAuth client secret"
+    )
+
     @computed_field
     @property
     def a2a_agent_url(self) -> str:

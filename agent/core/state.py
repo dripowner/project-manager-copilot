@@ -68,13 +68,14 @@ class AgentState(TypedDict):
     """State for PM Copilot Agent graph.
 
     This state is passed between nodes and tracks the conversation,
-    project context, execution plan, and results.
+    project context, user context (for audit), execution plan, and results.
     """
 
     messages: Annotated[
         list, add_messages
     ]  # Conversation history with add_messages reducer
     project_context: ProjectContext  # Current project context
+    user_context: dict | None  # User context for audit logging (NOT for authorization)
     plan: Plan | None  # Execution plan (None for simple mode)
     mode: Literal["simple", "plan_execute"]  # Execution mode
     tool_results: list[dict]  # History of tool call results

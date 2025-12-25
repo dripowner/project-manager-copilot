@@ -5,6 +5,7 @@ import logging
 import uuid
 
 import chainlit as cl
+import httpx
 from a2a.client import ClientFactory
 from a2a.client.client import Client, ClientConfig
 from a2a.types import Message, Task, TextPart, Part
@@ -12,6 +13,7 @@ from a2a.types import Message, Task, TextPart, Part
 from agent.core.messages import STATUS_INDICATORS
 from pm_mcp.core.validation import ValidationError, sanitize_user_input
 from web_chat.config import get_settings
+from web_chat.session_manager import create_chat_session, update_chat_session
 
 settings = get_settings()
 
@@ -20,6 +22,96 @@ logging.basicConfig(
     format="[%(asctime)s] %(levelname)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+# Authentication callbacks
+@cl.password_auth_callback
+async def password_auth(username: str, password: str) -> cl.User | None:
+    """Authenticate user via auth_service.
+
+    Args:
+        username: User email
+        password: User password
+
+    Returns:
+        cl.User if authentication successful, None otherwise
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{settings.auth_service_url}/auth/login",
+                json={"email": username, "password": password},
+                timeout=10.0,
+            )
+            if response.status_code == 200:
+                user_data = response.json()
+                logger.info(f"User authenticated: {user_data.get('email')}")
+                return cl.User(
+                    identifier=user_data["email"],
+                    metadata={
+                        "id": user_data["id"],
+                        "full_name": user_data.get("full_name"),
+                        "avatar_url": user_data.get("avatar_url"),
+                        "default_project_key": user_data.get("default_project_key"),
+                        # SECURITY: JWT token stored in metadata for API calls
+                        # WARNING: Do NOT log user.metadata - contains sensitive access_token
+                        "access_token": user_data.get("access_token"),
+                    },
+                )
+            else:
+                logger.warning(f"Authentication failed with status {response.status_code}")
+                # Only log username in DEBUG mode (prevent user enumeration)
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"Failed login attempt for: {username}")
+                return None
+    except Exception as e:
+        logger.error(f"Authentication error: {e}")
+        return None
+
+
+@cl.oauth_callback
+async def oauth_callback(
+    provider_id: str,
+    token: str,
+    raw_user_data: dict,
+    default_user: cl.User,
+) -> cl.User | None:
+    """Authenticate user via OAuth (Google/GitHub).
+
+    Args:
+        provider_id: OAuth provider (google, github)
+        token: OAuth access token
+        raw_user_data: User data from OAuth provider
+        default_user: Default user object from Chainlit
+
+    Returns:
+        cl.User if authentication successful, None otherwise
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{settings.auth_service_url}/auth/oauth/{provider_id}/callback",
+                json={"token": token, "user_data": raw_user_data},
+                timeout=10.0,
+            )
+            if response.status_code == 200:
+                user_data = response.json()
+                logger.info(f"OAuth user authenticated: {user_data.get('email')}")
+                return cl.User(
+                    identifier=user_data["email"],
+                    metadata={
+                        "id": user_data["id"],
+                        "full_name": user_data.get("full_name"),
+                        "avatar_url": user_data.get("avatar_url"),
+                        "default_project_key": user_data.get("default_project_key"),
+                    },
+                )
+            else:
+                logger.warning(f"OAuth authentication failed: {response.status_code}")
+                return None
+    except Exception as e:
+        logger.error(f"OAuth authentication error: {e}")
+        return None
 
 # Глобальный A2A client и lock для потокобезопасной инициализации
 a2a_client: Client | None = None
@@ -59,11 +151,32 @@ async def on_chat_start():
     if a2a_client is None:
         await initialize_a2a_client()
 
-    # Генерация уникального session_id и context_id для A2A
+    # Генерация уникального session_id
     session_id = str(uuid.uuid4())
-    context_id = str(uuid.uuid4())  # Единый context_id для всей сессии
     cl.user_session.set("session_id", session_id)
+
+    # Get JWT token from user metadata
+    user = cl.user_session.get("user")
+    access_token = None
+    if user and hasattr(user, "metadata") and user.metadata:
+        access_token = user.metadata.get("access_token")
+
+    context_id = str(uuid.uuid4())
+
+    # Create ChatSession via auth_service API if authenticated
+    if access_token:
+        try:
+            chat_session = await create_chat_session(access_token, title=None)
+            context_id = chat_session["thread_id"]
+            logger.info(f"Created ChatSession with thread_id: {context_id}")
+        except Exception as e:
+            logger.warning(f"Failed to create ChatSession via API: {e}")
+            # Fallback to UUID-based context_id
+    else:
+        logger.warning("No access_token available, using UUID-based context_id")
+
     cl.user_session.set("context_id", context_id)
+    cl.user_session.set("first_message_sent", False)  # Track first message for title generation
 
     # Приветствие (без запроса project_key - агент сам поймет)
     await cl.Message(
@@ -90,12 +203,56 @@ async def on_message(message: cl.Message):
         # Получаем context_id из сессии для сохранения истории разговора
         context_id = cl.user_session.get("context_id")
 
+        # Get JWT token from user session
+        user = cl.user_session.get("user")
+        access_token = None
+        if user and hasattr(user, "metadata") and user.metadata:
+            access_token = user.metadata.get("access_token")
+
+        # Auto-generate chat title from first message (first 50 chars)
+        first_message_sent = cl.user_session.get("first_message_sent", False)
+        if not first_message_sent:
+            title = message.content[:50].strip()
+            if len(message.content) > 50:
+                title += "..."
+
+            # Update chat session title via API
+            if access_token:
+                try:
+                    await update_chat_session(context_id, access_token, title=title)
+                    logger.info(f"Updated chat title: {title}")
+                except Exception as e:
+                    logger.warning(f"Failed to update chat title: {e}")
+
+            cl.user_session.set("first_message_sent", True)
+            logger.debug(f"Auto-generated title: {title}")
+
+        # Increment message count via API
+        if access_token:
+            try:
+                await update_chat_session(context_id, access_token, increment_message=True)
+            except Exception as e:
+                logger.warning(f"Failed to increment message count: {e}")
+
         # Sanitize user input (XSS prevention, DoS prevention)
         try:
             sanitized_content = sanitize_user_input(message.content)
         except ValidationError as e:
             await cl.Message(content=f"❌ {str(e)}").send()
             return
+
+        # Prepare user metadata for audit logging (exclude sensitive fields)
+        user_metadata = {}
+        user = cl.user_session.get("user")
+        if user and hasattr(user, "metadata") and user.metadata:
+            user_metadata = {
+                "user_id": user.metadata.get("id"),
+                "user_email": user.identifier,
+                "user_full_name": user.metadata.get("full_name"),
+                "default_project_key": user.metadata.get("default_project_key"),
+                # NOTE: access_token NOT included in audit metadata (sensitive)
+            }
+            logger.debug(f"Adding user context: {user.identifier}")
 
         # Создаем текстовое сообщение для A2A (user message)
         text_part = TextPart(text=sanitized_content)
@@ -105,6 +262,7 @@ async def on_message(message: cl.Message):
             contextId=context_id,  # Используем один context_id для всей сессии
             role="user",
             parts=[part],
+            metadata=user_metadata if user_metadata else None,  # Add user context for audit
         )
 
         # Tracking для обработанных сообщений и компонентов отображения

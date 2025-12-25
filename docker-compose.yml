@@ -1,4 +1,21 @@
 services:
+  # PostgreSQL database for user authentication
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: pm_copilot
+      POSTGRES_USER: ${POSTGRES_USER:-pm_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?ERROR: POSTGRES_PASSWORD must be set in .env file}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pm_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   mcp-server:
     build:
       context: .
@@ -8,6 +25,28 @@ services:
     ports:
       - "8000:8000"
 
+  # Auth Service for user authentication
+  auth-service:
+    build:
+      context: .
+      dockerfile: auth_service/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-pm_user}:${POSTGRES_PASSWORD}@postgres:5432/pm_copilot
+      SECRET_KEY: ${AUTH_SECRET_KEY:?ERROR: AUTH_SECRET_KEY must be set in .env file}
+      HOST: 0.0.0.0
+      PORT: 8003
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
+      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
+    env_file:
+      - .env
+    ports:
+      - "8003:8003"
+
   agent-a2a:
     build:
       context: .
@@ -15,6 +54,8 @@ services:
     depends_on:
       mcp-server:
         condition: service_started
+      postgres:
+        condition: service_healthy
     environment:
       # MCP Server connection
       MCP_SERVER_URL: ${MCP_SERVER_URL:-http://mcp-server:8000/mcp}
@@ -28,6 +69,8 @@ services:
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       OPENAI_BASE_MODEL: ${OPENAI_BASE_MODEL:-gpt-4o-mini}
       MAX_ITERATIONS: ${MAX_ITERATIONS:-10}
+      # Agent Database (AsyncPostgresSaver)
+      AGENT_DATABASE_URL: postgresql://${POSTGRES_USER:-pm_user}:${POSTGRES_PASSWORD}@postgres:5432/pm_copilot
     env_file:
       - .env
     ports:
@@ -41,9 +84,17 @@ services:
     depends_on:
       agent-a2a:
         condition: service_started
+      auth-service:
+        condition: service_started
     environment:
       A2A_SERVER_HOST: ${A2A_SERVER_HOST:-agent-a2a}
       A2A_SERVER_PORT: ${A2A_SERVER_PORT:-8001}
+      AUTH_SERVICE_URL: http://auth-service:8003
+      CHAINLIT_AUTH_SECRET: ${CHAINLIT_AUTH_SECRET:?ERROR: CHAINLIT_AUTH_SECRET must be set in .env file}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
+      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
     env_file:
       - .env
     ports:
@@ -51,4 +102,5 @@ services:
     command: chainlit run web_chat/app.py --host 0.0.0.0 --port 8002
 
 volumes:
+  postgres_data:
   agent-logs:

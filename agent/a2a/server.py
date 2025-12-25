@@ -10,7 +10,7 @@ from fastapi import FastAPI
 
 from agent.a2a.agent_card import get_agent_card
 from agent.a2a.executor import PMCopilotExecutor
-from agent.core.checkpointer import close_checkpointer, create_checkpointer
+from agent.core.checkpointer import close_checkpointer
 from agent.core.config import AgentSettings
 from agent.core.mcp_client import MCPClientWrapper
 
@@ -21,19 +21,26 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Lifecycle manager for A2A server.
 
-    Handles cleanup of checkpointer on shutdown.
+    Handles setup and cleanup of AsyncPostgresSaver.
     Dependencies are initialized in create_a2a_app() before handler creation.
 
     Args:
         app: FastAPI application
     """
+    logger.info("A2A server starting...")
+
+    # Setup AsyncPostgresSaver tables (idempotent, safe to call on every startup)
+    checkpointer = app.state.checkpointer
+    await checkpointer.setup()
+    logger.info("AsyncPostgresSaver tables initialized")
+
     logger.info("A2A server started")
 
     yield
 
     # Cleanup
     logger.info("Shutting down A2A server...")
-    close_checkpointer(app.state.checkpointer)
+    await close_checkpointer(checkpointer)
     logger.info("A2A server shutdown complete")
 
 
@@ -60,9 +67,18 @@ def create_a2a_app() -> FastAPI:
     mcp_client = MCPClientWrapper(mcp_config)
     logger.info(f"MCP client initialized for {settings.mcp_server_url}")
 
-    # Initialize checkpointer
-    checkpointer = create_checkpointer()
-    logger.info("In-memory checkpointer initialized")
+    # Initialize checkpointer with manual lifecycle management
+    # NOTE: Can't use recommended 'async with' pattern in FastAPI startup phase
+    # Cleanup is handled explicitly in lifespan shutdown via close_checkpointer()
+    # Reference: LangGraph docs recommend context managers, but not applicable for long-running servers
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+    checkpointer = AsyncPostgresSaver.from_conn_string(
+        settings.agent_database_url,
+        pool_size=5,
+        max_overflow=10,
+    )
+    logger.info("AsyncPostgresSaver instance created (setup in lifespan)")
 
     # Initialize task store
     task_store = InMemoryTaskStore()

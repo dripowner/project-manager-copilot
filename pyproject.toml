@@ -15,6 +15,7 @@ agent = [
     "langchain-openai>=1.1.1",
     "langgraph>=1.0.4",
     "langgraph-checkpoint>=3.0.1",
+    "langgraph-checkpoint-postgres>=3.0.2",
     "pydantic>=2.12.5",
     "pydantic-settings>=2.12.0",
     "rich>=14.2.0",
@@ -50,6 +51,13 @@ web-chat = [
     "pydantic>=2.12.5",
     "pydantic-settings>=2.12.0",
     "uvicorn>=0.38.0",
+]
+auth = [
+    "fastapi-users[sqlalchemy]>=13.0.0",
+    "asyncpg>=0.29.0",
+    "alembic>=1.13.0",
+    "httpx>=0.28.1",
+    "fastapi>=0.124.0",
 ]
 
 [tool.pytest.ini_options]

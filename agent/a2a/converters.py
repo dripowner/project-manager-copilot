@@ -120,3 +120,56 @@ def extract_project_context(
         sprint_name=sprint_name,
         team_members=team_members,
     )
+
+
+def extract_user_context(msg: Any) -> dict[str, Any] | None:
+    """Extract user context from A2A message metadata for audit logging.
+
+    IMPORTANT: Agent does NOT enforce authorization based on this data.
+    User context is for audit/logging only.
+
+    Args:
+        msg: A2A Message object with optional metadata
+
+    Returns:
+        Dictionary with user context if available, None otherwise.
+        Keys: user_id, user_email, user_full_name, default_project_key
+    """
+    if not hasattr(msg, "metadata") or not msg.metadata:
+        return None
+
+    metadata = msg.metadata
+
+    # Extract user fields
+    user_id = metadata.get("user_id")
+    user_email = metadata.get("user_email")
+    user_full_name = metadata.get("user_full_name")
+    default_project_key = metadata.get("default_project_key")
+
+    # Return None if no user context present
+    if not user_id and not user_email:
+        return None
+
+    # Validate types to prevent injection attacks
+    if user_id and not isinstance(user_id, str):
+        logger.warning("Invalid user_id type in metadata, ignoring")
+        user_id = None
+
+    if user_email and not isinstance(user_email, str):
+        logger.warning("Invalid user_email type in metadata, ignoring")
+        user_email = None
+
+    if user_full_name and not isinstance(user_full_name, str):
+        logger.warning("Invalid user_full_name type in metadata, ignoring")
+        user_full_name = None
+
+    if default_project_key and not isinstance(default_project_key, str):
+        logger.warning("Invalid default_project_key type in metadata, ignoring")
+        default_project_key = None
+
+    return {
+        "user_id": user_id,
+        "user_email": user_email,
+        "user_full_name": user_full_name,
+        "default_project_key": default_project_key,
+    }

@@ -62,6 +62,12 @@ class AgentSettings(BaseSettings):
         description="A2A server base URL for Agent Card (URL_AGENT in cloud, A2A_SERVER_BASE_URL locally)",
     )
 
+    # Database Configuration (AsyncPostgresSaver)
+    agent_database_url: str = Field(
+        default="postgresql://pm_user:changeme@postgres:5432/pm_copilot",
+        description="PostgreSQL connection string for AsyncPostgresSaver (psycopg format)",
+    )
+
     # Agent Card Metadata
     # Cloud.ru provides: AGENT_NAME, AGENT_DESCRIPTION, AGENT_VERSION
     agent_name: str = Field(

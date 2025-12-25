@@ -18,6 +18,7 @@ async def run_agent_streaming(
     query: str,
     settings: AgentSettings,
     project_context: ProjectContext,
+    user_context: dict | None,
     mcp_client: MCPClientWrapper,
     checkpointer: Optional[BaseCheckpointSaver] = None,
     thread_id: str = "a2a-session",
@@ -30,6 +31,7 @@ async def run_agent_streaming(
         query: User query to process
         settings: Agent settings
         project_context: Project context information
+        user_context: User context for audit logging (NOT for authorization)
         mcp_client: Initialized MCP client wrapper
         checkpointer: Optional checkpointer for persistent state
         thread_id: Thread ID for conversation persistence
@@ -43,6 +45,7 @@ async def run_agent_streaming(
     initial_state: AgentState = {
         "messages": [HumanMessage(content=query)],
         "project_context": project_context,
+        "user_context": user_context,
         "plan": None,
         "mode": "simple",
         "tool_results": [],

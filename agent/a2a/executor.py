@@ -14,6 +14,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from agent.a2a.converters import (
     extract_message_content,
     extract_project_context,
+    extract_user_context,
 )
 from agent.core.config import AgentSettings
 from agent.core.mcp_client import MCPClientWrapper
@@ -59,6 +60,16 @@ class PMCopilotExecutor(AgentExecutor):
             a2a_msg = context.message
             query = extract_message_content(a2a_msg)
             project_context = extract_project_context(a2a_msg, self.settings)
+            user_context = extract_user_context(a2a_msg)
+
+            # Log user info for audit (NO authorization check!)
+            if user_context:
+                logger.info(
+                    f"Request from user: {user_context.get('user_email')} "
+                    f"(ID: {user_context.get('user_id')})"
+                )
+            else:
+                logger.info("Anonymous request")
 
             logger.info(
                 f"Executing PM Copilot for task {context.task_id}, "
@@ -92,6 +103,7 @@ class PMCopilotExecutor(AgentExecutor):
                 query=query,
                 settings=self.settings,
                 project_context=project_context,
+                user_context=user_context,
                 mcp_client=self.mcp_client,
                 checkpointer=self.checkpointer,
                 thread_id=context.context_id,
